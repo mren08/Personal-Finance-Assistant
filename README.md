@@ -22,27 +22,19 @@ python app.py
 
 Then open `http://localhost:5055`.
 
-## Deploy For Test Users
+## Deploy on Render
 
-The simplest way to avoid requiring users to run the backend locally is to deploy this Flask app to a small hosting platform such as Render, Railway, or Fly.io.
+1. Push the project to GitHub.
+2. Create a new web service on Render.
+3. Connect this repository.
+4. Use the default settings from `render.yaml`, or confirm:
+   - Build command: `pip install -r requirements.txt`
+   - Start command: `gunicorn --bind 0.0.0.0:$PORT app:app`
+5. Wait for the deploy to finish, then open the Render URL.
 
-This repo now includes:
+### Demo Privacy Note
 
-- `requirements.txt` with `gunicorn`
-- `Procfile` with a production bind command
-- `render.yaml` for one-click Render setup
-- `/healthz` endpoint for deployment health checks
-
-Typical deployment flow:
-
-1. Push the project to GitHub
-2. Create a new web service on Render
-3. Connect the repo
-4. Render can read `render.yaml` automatically, or use:
-- Build command: `pip install -r requirements.txt`
-- Start command: `gunicorn --bind 0.0.0.0:$PORT app:app`
-
-After that, users can open a hosted URL in a browser without installing Python or running your backend code.
+This deployment is for coursework/demo use. It is not production-safe for sensitive financial data because it does not yet include authentication, per-user data isolation, or long-term storage controls.
 
 ### Custom Domain
 

@@ -1,5 +1,6 @@
 import io
 import unittest
+from pathlib import Path
 
 from app import app
 
@@ -86,6 +87,12 @@ class AppRouteTests(unittest.TestCase):
             response.get_json(),
             {"error": "Please choose a CSV file before submitting."},
         )
+
+    def test_readme_mentions_render_deploy_and_public_demo_risk(self):
+        readme = Path("README.md").read_text(encoding="utf-8")
+
+        self.assertIn("Create a new web service on Render", readme)
+        self.assertIn("not production-safe for sensitive financial data", readme)
 
 
 if __name__ == "__main__":

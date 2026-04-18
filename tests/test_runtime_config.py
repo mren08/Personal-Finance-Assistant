@@ -1,5 +1,6 @@
 import os
 import unittest
+from pathlib import Path
 from unittest.mock import patch
 
 from flask import Flask
@@ -38,6 +39,16 @@ class RuntimeConfigTests(unittest.TestCase):
 
         routes = {rule.rule for rule in flask_app.url_map.iter_rules()}
         self.assertTrue({"/", "/healthz", "/api/analyze"}.issubset(routes))
+
+
+class DeploymentFileTests(unittest.TestCase):
+    def test_procfile_and_render_config_match_gunicorn_entrypoint(self):
+        procfile = Path("Procfile").read_text(encoding="utf-8").strip()
+        render_yaml = Path("render.yaml").read_text(encoding="utf-8")
+
+        self.assertEqual(procfile, "web: gunicorn --bind 0.0.0.0:${PORT:-5055} app:app")
+        self.assertIn("startCommand: gunicorn --bind 0.0.0.0:$PORT app:app", render_yaml)
+        self.assertIn("healthCheckPath: /healthz", render_yaml)
 
 
 if __name__ == "__main__":
