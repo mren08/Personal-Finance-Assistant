@@ -6,11 +6,13 @@ import tempfile
 from collections import defaultdict
 from datetime import datetime
 
-from flask import Flask, jsonify, render_template, request
+from flask import Flask, current_app, jsonify, redirect, render_template, request, session, url_for
 
+from coach import OverspendingCoach
 from csv_parser import CategorizedTransaction, StatementCsvParser
 from recurrence import RecurringExpenseAnalyzer
 from recommender import BudgetRecommender
+from storage import Storage
 
 def _parse_float(form, field: str, default: float = 0.0) -> float:
     raw = form.get(field, str(default)).strip()
@@ -142,17 +144,75 @@ def _parse_budget_caps(raw_json: str, defaults: dict[str, float]) -> dict[str, f
 
 def create_app() -> Flask:
     app = Flask(__name__)
+    app.secret_key = os.getenv("SECRET_KEY", "dev-secret")
+    app.config["storage"] = Storage(os.getenv("APP_DB_PATH", "budget_app.db"))
+    app.config["coach"] = OverspendingCoach()
+
+    def get_storage() -> Storage:
+        return current_app.config["storage"]
+
+    def get_coach() -> OverspendingCoach:
+        return current_app.config["coach"]
+
+    def current_user_id() -> int | None:
+        raw = session.get("user_id")
+        return int(raw) if raw is not None else None
+
+    def require_user_id() -> int:
+        user_id = current_user_id()
+        if user_id is None:
+            raise PermissionError("Sign in first.")
+        return user_id
 
     @app.route("/")
     def index():
+        user_id = current_user_id()
+        profile = None
+        user = None
+        if user_id is not None:
+            user = get_storage().get_user(user_id)
+            if user:
+                profile = get_storage().get_dashboard_data(user_id)
+            else:
+                session.pop("user_id", None)
+
         return render_template(
             "index.html",
             default_budget_caps=BudgetRecommender.default_target_max_ratio(),
+            logged_in=profile is not None,
+            user=user,
+            profile=profile,
         )
 
     @app.route("/healthz")
     def healthcheck():
         return jsonify({"status": "ok"}), 200
+
+    @app.route("/signup", methods=["POST"])
+    def signup():
+        email = request.form.get("email", "").strip()
+        password = request.form.get("password", "")
+        try:
+            user_id = get_storage().create_user(email, password)
+        except ValueError as exc:
+            return str(exc), 400
+        session["user_id"] = user_id
+        return redirect(url_for("index"))
+
+    @app.route("/login", methods=["POST"])
+    def login():
+        email = request.form.get("email", "").strip()
+        password = request.form.get("password", "")
+        user_id = get_storage().authenticate_user(email, password)
+        if user_id is None:
+            return "Invalid email or password.", 401
+        session["user_id"] = user_id
+        return redirect(url_for("index"))
+
+    @app.route("/logout", methods=["POST"])
+    def logout():
+        session.pop("user_id", None)
+        return redirect(url_for("index"))
 
     @app.route("/api/analyze", methods=["POST"])
     def analyze_statement():
@@ -230,6 +290,92 @@ def create_app() -> Flask:
         finally:
             if os.path.exists(temp_path):
                 os.unlink(temp_path)
+
+    @app.route("/api/upload-statement", methods=["POST"])
+    def upload_statement():
+        try:
+            user_id = require_user_id()
+        except PermissionError as exc:
+            return jsonify({"error": str(exc)}), 401
+
+        if "statement" not in request.files:
+            return jsonify({"error": "Missing CSV file input named 'statement'."}), 400
+
+        upload = request.files["statement"]
+        if not upload.filename.strip():
+            return jsonify({"error": "Please choose a CSV file before submitting."}), 400
+        if not upload.filename.lower().endswith(".csv"):
+            return jsonify({"error": "Only CSV statements are supported for this flow."}), 400
+
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".csv") as tmp:
+            upload.save(tmp.name)
+            temp_path = tmp.name
+
+        try:
+            parser = StatementCsvParser()
+            transactions = parser.parse(temp_path)
+            get_storage().add_transactions(
+                user_id,
+                [
+                    {
+                        "date": item.date,
+                        "description": item.description,
+                        "amount": item.amount,
+                        "category": item.category,
+                        "source": "statement",
+                    }
+                    for item in transactions
+                ],
+            )
+            return jsonify(
+                {
+                    "saved_transactions": len(transactions),
+                    "profile": get_storage().get_dashboard_data(user_id),
+                }
+            )
+        except ValueError as exc:
+            return jsonify({"error": str(exc)}), 400
+        finally:
+            if os.path.exists(temp_path):
+                os.unlink(temp_path)
+
+    @app.route("/api/chat", methods=["POST"])
+    def chat():
+        try:
+            user_id = require_user_id()
+        except PermissionError as exc:
+            return jsonify({"error": str(exc)}), 401
+
+        payload = request.get_json(silent=True) or {}
+        message = str(payload.get("message", "")).strip()
+        if not message:
+            return jsonify({"error": "Message is required."}), 400
+
+        storage = get_storage()
+        coach = get_coach()
+        profile = storage.get_dashboard_data(user_id)
+        result = coach.process_message(message, profile)
+
+        storage.add_chat_message(user_id, "user", message)
+        storage.add_chat_message(user_id, "assistant", result["reply"])
+
+        action = result["action"]
+        if action["type"] == "add_transaction":
+            storage.add_transactions(user_id, [action["transaction"]])
+        elif action["type"] == "mark_subscription_cancel":
+            storage.save_subscription_decision(user_id, action["merchant"], "cancel")
+        elif action["type"] == "mark_subscription_keep":
+            storage.save_subscription_decision(user_id, action["merchant"], "keep")
+
+        updated_profile = storage.get_dashboard_data(user_id)
+        return jsonify(
+            {
+                "reply": result["reply"],
+                "action": action,
+                "messages": updated_profile["messages"],
+                "profile": updated_profile,
+            }
+        )
 
     return app
 

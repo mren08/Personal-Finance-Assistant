@@ -1,8 +1,10 @@
 import io
+import os
+import tempfile
 import unittest
 from pathlib import Path
 
-from app import app
+import app as app_module
 
 
 SAMPLE_CSV = """Transaction Date,Description,Category,Amount
@@ -14,13 +16,22 @@ SAMPLE_CSV = """Transaction Date,Description,Category,Amount
 
 class AppRouteTests(unittest.TestCase):
     def setUp(self):
-        self.client = app.test_client()
+        self.temp_dir = tempfile.TemporaryDirectory()
+        os.environ["APP_DB_PATH"] = f"{self.temp_dir.name}/test.db"
+        os.environ["SECRET_KEY"] = "test-secret"
+        self.app = app_module.create_app()
+        self.client = self.app.test_client()
+
+    def tearDown(self):
+        self.temp_dir.cleanup()
+        os.environ.pop("APP_DB_PATH", None)
+        os.environ.pop("SECRET_KEY", None)
 
     def test_index_page_loads(self):
         response = self.client.get("/")
 
         self.assertEqual(response.status_code, 200)
-        self.assertIn(b"Budgeting Assistant", response.data)
+        self.assertIn(b"Cut the waste", response.data)
 
     def test_healthcheck_returns_ok(self):
         response = self.client.get("/healthz")
@@ -61,6 +72,46 @@ class AppRouteTests(unittest.TestCase):
         self.assertEqual(payload["category_totals"]["Groceries"], 48.1)
         self.assertIn("recommendations", payload)
         self.assertIn("actionable_tips_details", payload)
+
+    def test_signup_logs_user_in_and_shows_dashboard(self):
+        response = self.client.post(
+            "/signup",
+            data={"email": "demo@example.com", "password": "secret123"},
+            follow_redirects=True,
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(b"Overspending Coach", response.data)
+        self.assertIn(b"Accountability Chat", response.data)
+
+    def test_upload_persists_transactions_for_logged_in_user(self):
+        self.client.post("/signup", data={"email": "demo@example.com", "password": "secret123"})
+
+        response = self.client.post(
+            "/api/upload-statement",
+            data={"statement": (io.BytesIO(SAMPLE_CSV.encode("utf-8")), "statement.csv")},
+            content_type="multipart/form-data",
+        )
+
+        payload = response.get_json()
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(payload["saved_transactions"], 2)
+        self.assertIn("profile", payload)
+        self.assertEqual(payload["profile"]["transaction_count"], 2)
+
+    def test_chat_endpoint_saves_manual_transaction_action(self):
+        self.client.post("/signup", data={"email": "demo@example.com", "password": "secret123"})
+
+        response = self.client.post(
+            "/api/chat",
+            json={"message": "I ate at Howoo for $50"},
+        )
+
+        payload = response.get_json()
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(payload["action"]["type"], "add_transaction")
+        self.assertIn("messages", payload)
+        self.assertGreaterEqual(payload["profile"]["transaction_count"], 1)
 
     def test_analyze_rejects_blank_filename(self):
         response = self.client.post(

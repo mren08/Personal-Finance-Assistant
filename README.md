@@ -1,15 +1,14 @@
-# Budgeting Web App
+# Overspending Coach
 
 This app can:
 
-1. Parse credit card CSV statements
-2. Use the CSV's explicit categories
-3. Display spending graphically (including category percentages in the donut chart)
-4. Provide budgeting recommendations
-5. Suggest actionable tips based on remaining money
-6. Add optional manual expenses that are not in your statement
-7. Edit category budget caps directly in the UI
-8. Detect recurring expenses from prior statements and normalize them into weekly planning guidance
+1. Create user accounts with private saved history
+2. Parse credit card CSV statements and store transactions per user
+3. Detect recurring subscriptions from saved history
+4. Keep a persistent accountability chat tied to each account
+5. Let users add missing spend in plain language such as cash, Zelle, or split bills
+6. Save keep-or-cancel subscription decisions from chat
+7. Preserve the existing one-off analyzer endpoint for budgeting recommendations
 
 ## Run
 
@@ -21,6 +20,19 @@ python app.py
 ```
 
 Then open `http://localhost:5055`.
+
+On first run, the app creates a local SQLite database file named `budget_app.db` unless you override it with `APP_DB_PATH`.
+
+## Product Direction
+
+This version is built as an overspending coach rather than a generic budgeting dashboard. The main product loop is:
+
+1. Sign up or sign in
+2. Upload a statement to build saved history
+3. Review recurring subscriptions and recent transactions
+4. Use persistent chat to add missing transactions or mark subscriptions to keep/cancel
+
+The chat is intentionally blunt. It is meant to act like an accountability partner, not a neutral assistant.
 
 ## Deploy on Render
 
@@ -35,7 +47,7 @@ If you want to deploy with `render.yaml` instead, use Render's `New > Blueprint`
 
 ### Demo Privacy Note
 
-This deployment is for coursework/demo use. It is not production-safe for sensitive financial data because it does not yet include authentication, per-user data isolation, or long-term storage controls.
+This deployment is for coursework/demo use. It now includes basic authentication and per-user data storage, but it is still not production-safe for sensitive financial data because it does not yet include hardened auth flows, encryption-at-rest, or production-grade security controls.
 
 ### Custom Domain
 
@@ -68,9 +80,9 @@ The upload expects a CSV with these columns:
 
 The app treats negative amounts as expenses, ignores non-expense rows (like payments/credits), and uses the `Category` value directly.
 
-## Better Tips Inputs
+## Analyzer Compatibility
 
-The recommendation engine supports richer inputs from the UI:
+The original analyzer route still supports richer budgeting inputs:
 
 - `Fixed costs ($)` optional
 - `Goal name / goal amount / timeline` optional
@@ -84,3 +96,4 @@ The recommendation engine supports richer inputs from the UI:
 
 - Categories are not inferred; they come directly from the CSV.
 - Credits/payments/refunds are filtered out by default so the analysis focuses on expenses.
+- Merchant classification in chat is still heuristic in this phase. External lookup-backed classification is a later step.

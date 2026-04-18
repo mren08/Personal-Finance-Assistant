@@ -3,656 +3,541 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Budgeting Assistant</title>
-  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <title>Overspending Coach</title>
   <style>
     :root {
-      --bg: #f4f7fb;
-      --card: #ffffff;
-      --ink: #112240;
-      --muted: #5a6780;
-      --accent: #0d9488;
-      --warn: #dc2626;
-      --radius: 16px;
+      --ink: #1f2937;
+      --muted: #5b6472;
+      --bg: #f3efe6;
+      --card: #fffdf8;
+      --line: #ddd2bf;
+      --accent: #ab3b2f;
+      --accent-dark: #7d281f;
+      --good: #2f6b46;
+      --bad: #aa1f1f;
+      --shadow: 0 18px 50px rgba(54, 43, 31, 0.12);
+      --radius: 22px;
     }
     * { box-sizing: border-box; }
     body {
       margin: 0;
-      font-family: "Avenir Next", "Helvetica Neue", sans-serif;
-      background: linear-gradient(180deg, #e6f7f5 0%, var(--bg) 55%);
+      font-family: "Avenir Next", "Segoe UI", sans-serif;
       color: var(--ink);
+      background:
+        radial-gradient(circle at top right, rgba(171, 59, 47, 0.13), transparent 24%),
+        linear-gradient(180deg, #f7f1e7 0%, var(--bg) 100%);
     }
-    .container {
-      max-width: 1100px;
-      margin: 32px auto;
-      padding: 0 16px 32px;
+    .shell {
+      max-width: 1180px;
+      margin: 0 auto;
+      padding: 24px 18px 48px;
     }
-    h1 { margin-bottom: 8px; }
-    .sub { color: var(--muted); margin-top: 0; }
-    .card {
+    .hero, .panel, .card {
       background: var(--card);
+      border: 1px solid rgba(121, 98, 73, 0.14);
       border-radius: var(--radius);
-      padding: 18px;
-      box-shadow: 0 10px 30px rgba(17, 34, 64, 0.08);
-      margin-bottom: 16px;
+      box-shadow: var(--shadow);
     }
-    .grid {
+    .hero {
+      padding: 28px;
       display: grid;
-      grid-template-columns: repeat(5, 1fr);
-      gap: 12px;
+      grid-template-columns: 1.3fr 0.9fr;
+      gap: 24px;
+      margin-bottom: 20px;
     }
-    .metric { font-size: 26px; font-weight: 700; }
-    .label { color: var(--muted); font-size: 13px; }
-    form {
-      display: flex;
-      gap: 10px;
-      flex-wrap: wrap;
-      align-items: flex-end;
-    }
-    .form-section {
-      width: 100%;
-      border: 1px solid #dfe7f2;
-      border-radius: 12px;
-      padding: 12px;
-      background: #fbfdff;
-    }
-    .section-title {
-      margin: 0 0 10px 0;
-      font-size: 13px;
-      color: var(--muted);
-      font-weight: 700;
+    .eyebrow {
       text-transform: uppercase;
-      letter-spacing: 0.03em;
+      font-size: 12px;
+      letter-spacing: 0.12em;
+      color: var(--accent);
+      font-weight: 700;
     }
-    .section-grid {
+    h1, h2, h3, p { margin-top: 0; }
+    h1 {
+      font-size: clamp(2.4rem, 4.6vw, 4.4rem);
+      line-height: 0.96;
+      margin-bottom: 14px;
+      max-width: 8ch;
+    }
+    .subhead {
+      color: var(--muted);
+      max-width: 56ch;
+      font-size: 1.02rem;
+      line-height: 1.6;
+    }
+    .hero-points {
       display: grid;
-      grid-template-columns: repeat(3, minmax(220px, 1fr));
+      grid-template-columns: repeat(3, 1fr);
+      gap: 12px;
+      margin-top: 20px;
+    }
+    .hero-points div {
+      background: #f8f2ea;
+      border-radius: 16px;
+      padding: 14px;
+      font-size: 0.94rem;
+    }
+    .auth-card {
+      background: #221f1c;
+      color: #fff7f0;
+      border-radius: 20px;
+      padding: 20px;
+    }
+    .auth-card p {
+      color: #eadfd5;
+    }
+    .form-stack, .chat-form, .upload-form {
+      display: grid;
       gap: 10px;
-      align-items: end;
     }
-    .caps-grid {
-      display: grid;
-      grid-template-columns: repeat(3, minmax(220px, 1fr));
-      gap: 8px;
-      align-items: end;
+    label {
+      display: block;
+      font-size: 0.88rem;
+      margin-bottom: 5px;
+      color: var(--muted);
     }
-    label { display: block; font-size: 13px; color: var(--muted); margin-bottom: 4px; }
-    input, button, select {
-      font: inherit;
-      padding: 10px 12px;
-      border-radius: 10px;
-      border: 1px solid #d6dde8;
+    .auth-card label { color: #f2dbcb; }
+    input, textarea, button {
       width: 100%;
+      font: inherit;
+      border-radius: 14px;
+      padding: 12px 14px;
+    }
+    input, textarea {
+      border: 1px solid var(--line);
+      background: #fff;
+    }
+    textarea {
+      min-height: 88px;
+      resize: vertical;
     }
     button {
+      border: 0;
+      cursor: pointer;
       background: var(--accent);
       color: white;
-      border: none;
-      cursor: pointer;
-      font-weight: 600;
-      width: auto;
+      font-weight: 700;
     }
-    button:disabled { opacity: 0.6; cursor: not-allowed; }
-    .warn { color: var(--warn); }
-    .columns {
+    button.secondary {
+      background: #eadfd5;
+      color: var(--ink);
+    }
+    .status {
+      min-height: 20px;
+      color: var(--muted);
+      font-size: 0.94rem;
+    }
+    .dashboard {
       display: grid;
-      grid-template-columns: 1.2fr .8fr;
-      gap: 16px;
+      grid-template-columns: 1.1fr 0.9fr;
+      gap: 18px;
     }
-    ul { margin: 0; padding-left: 20px; }
-    .tips-list { list-style: none; padding-left: 0; }
-    .tips-list li { margin-bottom: 10px; padding: 8px; background: #f7fafc; border-radius: 10px; }
-    .tip-text { font-weight: 600; margin-bottom: 4px; }
-    .tip-meta { font-size: 12px; color: var(--muted); }
-    .muted { color: var(--muted); font-size: 12px; }
-    .manual-list { list-style: none; margin: 8px 0 0 0; padding: 0; }
-    .manual-list li {
+    .stack {
+      display: grid;
+      gap: 18px;
+    }
+    .panel {
+      padding: 20px;
+    }
+    .topbar {
       display: flex;
       justify-content: space-between;
       align-items: center;
-      gap: 10px;
-      padding: 6px 8px;
-      border: 1px solid #e7edf6;
-      border-radius: 8px;
-      margin-bottom: 6px;
-      font-size: 13px;
+      margin-bottom: 18px;
+      gap: 16px;
+      flex-wrap: wrap;
     }
-    .recurring-list {
-      list-style: none;
-      margin: 10px 0 0 0;
-      padding: 0;
+    .topbar form { margin: 0; }
+    .metric-grid {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 12px;
     }
-    .recurring-list li {
-      padding: 8px 0;
-      border-bottom: 1px solid #edf1f6;
-      font-size: 13px;
+    .metric {
+      background: #f8f2ea;
+      border-radius: 16px;
+      padding: 14px;
     }
-    .recurring-name {
-      font-weight: 600;
-    }
-    .table-controls {
-      display: flex;
-      justify-content: flex-end;
-      align-items: center;
-      gap: 8px;
+    .metric .label {
+      color: var(--muted);
+      font-size: 0.82rem;
       margin-bottom: 8px;
     }
-    .small-btn {
-      padding: 6px 9px;
-      border-radius: 8px;
-      border: none;
-      color: #fff;
-      background: #334155;
-      cursor: pointer;
-      width: auto;
+    .metric .value {
+      font-size: 1.7rem;
+      font-weight: 700;
     }
-    table {
-      width: 100%;
-      border-collapse: collapse;
-      font-size: 14px;
+    .list {
+      list-style: none;
+      margin: 0;
+      padding: 0;
+      display: grid;
+      gap: 10px;
     }
-    th, td {
-      text-align: left;
-      border-bottom: 1px solid #edf1f6;
-      padding: 8px;
+    .list li {
+      border: 1px solid #efe4d3;
+      border-radius: 14px;
+      padding: 12px 14px;
+      background: #fffdfa;
     }
-    th.sortable {
-      cursor: pointer;
-      user-select: none;
-      white-space: nowrap;
+    .transactions li, .messages li {
+      display: grid;
+      gap: 6px;
     }
-    th.sortable:hover {
-      color: var(--accent);
+    .row {
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      flex-wrap: wrap;
     }
-    @media (max-width: 900px) {
-      .grid, .columns, .section-grid, .caps-grid {
+    .pill {
+      display: inline-block;
+      padding: 4px 9px;
+      border-radius: 999px;
+      background: #f1e4da;
+      color: var(--accent-dark);
+      font-size: 0.75rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }
+    .messages .assistant {
+      border-left: 4px solid var(--accent);
+    }
+    .messages .user {
+      border-left: 4px solid #8e7f73;
+    }
+    .muted { color: var(--muted); }
+    .small { font-size: 0.88rem; }
+    .empty {
+      color: var(--muted);
+      border: 1px dashed var(--line);
+      border-radius: 14px;
+      padding: 14px;
+      text-align: center;
+    }
+    .good { color: var(--good); }
+    .bad { color: var(--bad); }
+    @media (max-width: 980px) {
+      .hero, .dashboard, .metric-grid, .hero-points {
         grid-template-columns: 1fr;
       }
     }
   </style>
 </head>
 <body>
-  <div class="container">
-    <h1>Budgeting Assistant</h1>
-    <p class="sub">Upload your credit card statement CSV (with explicit categories) to visualize spending and get recommendations.</p>
+  <div class="shell">
+    {% if not logged_in %}
+      <section class="hero">
+        <div>
+          <div class="eyebrow">Overspending Coach</div>
+          <h1>Cut the waste before it cuts your goals.</h1>
+          <p class="subhead">A blunt accountability partner for overspending, subscriptions, and bad money habits. Upload statements, add missing transactions in chat, and let the system call out what you keep pretending is fine.</p>
+          <div class="hero-points">
+            <div><strong>Persistent profile</strong><br>Keep a running history tied to your account.</div>
+            <div><strong>Subscription pressure</strong><br>Surface recurring charges and overlapping services.</div>
+            <div><strong>Actionable chat</strong><br>Tell the agent what you bought or what you want to cut.</div>
+          </div>
+        </div>
+        <div class="auth-card">
+          <h2>Start tracking</h2>
+          <p>Create an account, upload a statement, then use the chatbox to add missing spend like Zelle, cash, or split bills.</p>
+          <form class="form-stack" method="post" action="/signup">
+            <div>
+              <label for="signup-email">Email</label>
+              <input id="signup-email" name="email" type="email" required>
+            </div>
+            <div>
+              <label for="signup-password">Password</label>
+              <input id="signup-password" name="password" type="password" required>
+            </div>
+            <button type="submit">Create account</button>
+          </form>
+          <p class="small" style="margin:12px 0 8px;">Already have an account?</p>
+          <form class="form-stack" method="post" action="/login">
+            <div>
+              <label for="login-email">Email</label>
+              <input id="login-email" name="email" type="email" required>
+            </div>
+            <div>
+              <label for="login-password">Password</label>
+              <input id="login-password" name="password" type="password" required>
+            </div>
+            <button class="secondary" type="submit">Sign in</button>
+          </form>
+        </div>
+      </section>
+    {% else %}
+      <div class="topbar">
+        <div>
+          <div class="eyebrow">Overspending Coach</div>
+          <h1 style="font-size:2.5rem; max-width:none; margin-bottom:6px;">Your spending history now has memory.</h1>
+          <p class="subhead" style="margin-bottom:0;">Signed in as {{ user.email }}. Upload fresh data, then use the accountability chat to add missing spend or mark subscriptions you are keeping versus cutting.</p>
+        </div>
+        <form method="post" action="/logout">
+          <button class="secondary" type="submit">Log out</button>
+        </form>
+      </div>
 
-    <div class="card">
-      <form id="analyze-form">
-        <div class="form-section">
-          <p class="section-title">Core Inputs</p>
-          <div class="section-grid">
-            <div>
-              <label for="statement">Statement CSV</label>
-              <input id="statement" name="statement" type="file" accept=".csv,text/csv" required>
+      <section class="dashboard">
+        <div class="stack">
+          <div class="panel">
+            <h2>Overspending Coach</h2>
+            <div class="metric-grid">
+              <div class="metric">
+                <div class="label">Total spent tracked</div>
+                <div class="value" id="total-spent">${{ '%.2f'|format(profile.total_spent or 0) }}</div>
+              </div>
+              <div class="metric">
+                <div class="label">Tracked transactions</div>
+                <div class="value" id="transaction-count">{{ profile.transaction_count }}</div>
+              </div>
+              <div class="metric">
+                <div class="label">Recurring baseline</div>
+                <div class="value" id="recurring-total">${{ '%.2f'|format(profile.monthly_recurring_total or 0) }}</div>
+              </div>
+              <div class="metric">
+                <div class="label">Subscription decisions</div>
+                <div class="value" id="decision-count">{{ profile.subscription_decisions|length }}</div>
+              </div>
             </div>
-            <div>
-              <label for="history_statements">History CSV(s) (optional)</label>
-              <input id="history_statements" name="history_statements" type="file" accept=".csv,text/csv" multiple>
-            </div>
-            <div>
-              <label for="monthly_budget">Monthly budget ($)</label>
-              <input id="monthly_budget" name="monthly_budget" type="number" min="0" step="0.01" value="3000" required>
-            </div>
-            <div>
-              <label for="fixed_costs">Fixed costs ($, optional)</label>
-              <input id="fixed_costs" name="fixed_costs" type="number" min="0" step="0.01" value="0">
-            </div>
+          </div>
+
+          <div class="panel">
+            <h2>Upload a statement</h2>
+            <p class="muted">CSV imports become part of your saved history. The chat can then layer in missing spend from Zelle, cash, or split bills.</p>
+            <form id="upload-form" class="upload-form">
+              <div>
+                <label for="statement">Statement CSV</label>
+                <input id="statement" name="statement" type="file" accept=".csv,text/csv" required>
+              </div>
+              <button type="submit">Save statement to history</button>
+            </form>
+            <p id="upload-status" class="status"></p>
+          </div>
+
+          <div class="panel">
+            <h2>Recent transactions</h2>
+            <ul class="list transactions" id="transactions-list">
+              {% if profile.recent_transactions %}
+                {% for transaction in profile.recent_transactions %}
+                  <li>
+                    <div class="row">
+                      <strong>{{ transaction.description }}</strong>
+                      <strong>${{ '%.2f'|format(transaction.amount) }}</strong>
+                    </div>
+                    <div class="row small muted">
+                      <span>{{ transaction.date }} · {{ transaction.category }}</span>
+                      <span class="pill">{{ transaction.source }}</span>
+                    </div>
+                  </li>
+                {% endfor %}
+              {% else %}
+                <li class="empty">No transactions yet. Start with a statement upload.</li>
+              {% endif %}
+            </ul>
           </div>
         </div>
 
-        <div class="form-section">
-          <p class="section-title">Savings Goal (Optional)</p>
-          <div class="section-grid">
-            <div>
-              <label for="goal_name">Goal name</label>
-              <input id="goal_name" name="goal_name" type="text" placeholder="e.g. Summer trip">
-            </div>
-            <div>
-              <label for="goal_amount">Goal amount ($)</label>
-              <input id="goal_amount" name="goal_amount" type="number" min="0" step="0.01" value="0">
-            </div>
-            <div>
-              <label for="goal_timeline_months">Timeline (months)</label>
-              <input id="goal_timeline_months" name="goal_timeline_months" type="number" min="1" step="1" value="6">
-            </div>
+        <div class="stack">
+          <div class="panel">
+            <h2>Recurring subscriptions</h2>
+            <ul class="list" id="subscriptions-list">
+              {% if profile.subscriptions %}
+                {% for subscription in profile.subscriptions %}
+                  <li>
+                    <div class="row">
+                      <strong>{{ subscription.merchant }}</strong>
+                      <span>${{ '%.2f'|format(subscription.monthly_equivalent) }}/mo</span>
+                    </div>
+                    <div class="small muted">{{ subscription.frequency }} · {{ subscription.category }} · last seen {{ subscription.last_seen }}</div>
+                  </li>
+                {% endfor %}
+              {% else %}
+                <li class="empty">No recurring charges detected yet. Upload more history to improve detection.</li>
+              {% endif %}
+            </ul>
+          </div>
+
+          <div class="panel">
+            <h2>Saved decisions</h2>
+            <ul class="list" id="decisions-list">
+              {% if profile.subscription_decisions %}
+                {% for decision in profile.subscription_decisions %}
+                  <li>
+                    <div class="row">
+                      <strong>{{ decision.merchant }}</strong>
+                      <span class="pill">{{ decision.decision }}</span>
+                    </div>
+                    <div class="small muted">{{ decision.created_at }}</div>
+                  </li>
+                {% endfor %}
+              {% else %}
+                <li class="empty">Use the chat to mark a subscription as keep or cancel.</li>
+              {% endif %}
+            </ul>
+          </div>
+
+          <div class="panel">
+            <h2>Accountability Chat</h2>
+            <p class="muted">Examples: “I ate at Howoo for $50” or “Cancel Netflix.”</p>
+            <ul class="list messages" id="messages-list">
+              {% if profile.messages %}
+                {% for message in profile.messages %}
+                  <li class="{{ message.role }}">
+                    <span class="pill">{{ message.role }}</span>
+                    <span>{{ message.content }}</span>
+                  </li>
+                {% endfor %}
+              {% else %}
+                <li class="empty">No messages yet. Start with a real expense or a subscription decision.</li>
+              {% endif %}
+            </ul>
+            <form id="chat-form" class="chat-form" style="margin-top:14px;">
+              <div>
+                <label for="chat-input">Message</label>
+                <textarea id="chat-input" placeholder="Tell the coach what you spent or what you want to cut." required></textarea>
+              </div>
+              <button type="submit">Send</button>
+            </form>
+            <p id="chat-status" class="status"></p>
           </div>
         </div>
-
-        <div class="form-section">
-          <p class="section-title">Manual Expenses (Optional)</p>
-          <div class="section-grid">
-            <div>
-              <label for="manual_date">Date</label>
-              <input id="manual_date" type="date">
-            </div>
-            <div>
-              <label for="manual_description">Description</label>
-              <input id="manual_description" type="text" placeholder="e.g. Cash lunch">
-            </div>
-            <div>
-              <label for="manual_category">Category</label>
-              <select id="manual_category"></select>
-            </div>
-            <div>
-              <label for="manual_amount">Amount ($)</label>
-              <input id="manual_amount" type="number" min="0.01" step="0.01" placeholder="0.00">
-            </div>
-            <div>
-              <button id="add-manual-btn" class="small-btn" type="button">Add Manual Expense</button>
-            </div>
-          </div>
-          <input id="manual_expenses_json" name="manual_expenses_json" type="hidden" value="[]">
-          <div id="manual-empty" class="muted">No manual expenses added.</div>
-          <ul id="manual-expenses-list" class="manual-list"></ul>
-        </div>
-
-        <details class="form-section">
-          <summary class="section-title">Budget Caps (Advanced)</summary>
-          <div id="budget-caps-grid" class="caps-grid"></div>
-          <input id="budget_caps_json" name="budget_caps_json" type="hidden" value="{}">
-          <div class="muted">Caps are percentages of monthly budget used for recommendation thresholds.</div>
-        </details>
-
-        <button id="submit-btn" type="submit">Analyze</button>
-      </form>
-      <p id="status" class="sub"></p>
-    </div>
-
-    <div id="results" style="display:none;">
-      <div class="grid">
-        <div class="card">
-          <div class="label">Total Spent</div>
-          <div id="total-spent" class="metric">$0.00</div>
-        </div>
-        <div class="card">
-          <div class="label">Monthly Budget</div>
-          <div id="budget" class="metric">$0.00</div>
-        </div>
-        <div class="card">
-          <div class="label">Remaining</div>
-          <div id="remaining" class="metric">$0.00</div>
-        </div>
-        <div class="card">
-          <div class="label">Discretionary Remaining</div>
-          <div id="discretionary-remaining" class="metric">$0.00</div>
-        </div>
-        <div class="card">
-          <div class="label">Normalized Weekly Plan</div>
-          <div id="normalized-weekly-spend" class="metric">$0.00</div>
-        </div>
-      </div>
-
-      <div class="columns">
-        <div class="card">
-          <h3>Expense Categories</h3>
-          <canvas id="category-chart"></canvas>
-          <h3>Recurring Expenses</h3>
-          <div id="recurring-summary" class="muted">Upload current and past statements to detect recurring charges.</div>
-          <ul id="recurring-expenses" class="recurring-list"></ul>
-        </div>
-        <div class="card">
-          <h3>Budget Recommendations</h3>
-          <ul id="recommendations"></ul>
-          <h3>Actionable Tips</h3>
-          <ul id="tips" class="tips-list"></ul>
-        </div>
-      </div>
-
-      <div class="card">
-        <h3>Transactions</h3>
-        <div class="table-controls">
-          <label for="category-filter">Category Filter</label>
-          <select id="category-filter">
-            <option value="">All</option>
-          </select>
-        </div>
-        <table>
-          <thead>
-            <tr>
-              <th class="sortable" data-sort-key="date">Date</th>
-              <th class="sortable" data-sort-key="description">Description</th>
-              <th class="sortable" data-sort-key="category">Category</th>
-              <th class="sortable" data-sort-key="amount">Amount</th>
-            </tr>
-          </thead>
-          <tbody id="transactions-body"></tbody>
-        </table>
-      </div>
-    </div>
+      </section>
+    {% endif %}
   </div>
 
-  <script>
-    const defaultBudgetCaps = {{ default_budget_caps | tojson }};
-    const form = document.getElementById("analyze-form");
-    const statusEl = document.getElementById("status");
-    const submitBtn = document.getElementById("submit-btn");
-    const resultsEl = document.getElementById("results");
-    const recommendationsEl = document.getElementById("recommendations");
-    const tipsEl = document.getElementById("tips");
-    const recurringExpensesEl = document.getElementById("recurring-expenses");
-    const recurringSummaryEl = document.getElementById("recurring-summary");
-    const transactionsBody = document.getElementById("transactions-body");
-    const categoryFilterEl = document.getElementById("category-filter");
-    const sortableHeaders = Array.from(document.querySelectorAll("th.sortable"));
-    const budgetCapsGridEl = document.getElementById("budget-caps-grid");
-    const budgetCapsJsonEl = document.getElementById("budget_caps_json");
-
-    const manualDateEl = document.getElementById("manual_date");
-    const manualDescriptionEl = document.getElementById("manual_description");
-    const manualCategoryEl = document.getElementById("manual_category");
-    const manualAmountEl = document.getElementById("manual_amount");
-    const addManualBtn = document.getElementById("add-manual-btn");
-    const manualListEl = document.getElementById("manual-expenses-list");
-    const manualEmptyEl = document.getElementById("manual-empty");
-    const manualJsonEl = document.getElementById("manual_expenses_json");
-
-    let chart;
-    let transactions = [];
-    let manualExpenses = [];
-    let sortState = { key: "date", direction: "desc" };
-    let currentCaps = { ...defaultBudgetCaps };
-
-    function money(value) {
-      return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(value);
-    }
-
-    function setList(el, items) {
-      el.innerHTML = "";
-      items.forEach((text) => {
-        const li = document.createElement("li");
-        li.textContent = text;
-        el.appendChild(li);
-      });
-    }
-
-    function setTips(el, tips) {
-      el.innerHTML = "";
-      (tips || []).forEach((tip) => {
-        const li = document.createElement("li");
-        const text = document.createElement("div");
-        text.className = "tip-text";
-        text.textContent = tip.text || "";
-        const meta = document.createElement("div");
-        meta.className = "tip-meta";
-        const impact = Number(tip.impact) || 0;
-        const dataSource = tip.data_source || "Current statement data";
-        const why = tip.why || "";
-        meta.textContent = `Why: ${why} | Impact: ${money(impact)} | Source: ${dataSource}`;
-        li.appendChild(text);
-        li.appendChild(meta);
-        el.appendChild(li);
-      });
-    }
-
-    function setRecurringExpenses(items, monthlyTotal) {
-      recurringExpensesEl.innerHTML = "";
-      if (!items || items.length === 0) {
-        recurringSummaryEl.textContent = "No recurring charges detected yet. Add prior statements to improve detection.";
-        return;
+  {% if logged_in %}
+    <script>
+      function money(value) {
+        return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(value || 0);
       }
 
-      recurringSummaryEl.textContent = `Estimated recurring baseline: ${money(monthlyTotal || 0)}/month`;
-      items.forEach((item) => {
-        const li = document.createElement("li");
-        li.innerHTML = `
-          <div class="recurring-name">${item.merchant}</div>
-          <div>${item.frequency} | ${item.category} | avg ${money(item.average_amount)} | monthly eq ${money(item.monthly_equivalent)}</div>
-        `;
-        recurringExpensesEl.appendChild(li);
-      });
-    }
+      function renderProfile(profile) {
+        document.getElementById("total-spent").textContent = money(profile.total_spent);
+        document.getElementById("transaction-count").textContent = profile.transaction_count;
+        document.getElementById("recurring-total").textContent = money(profile.monthly_recurring_total);
+        document.getElementById("decision-count").textContent = (profile.subscription_decisions || []).length;
 
-    function renderBudgetCaps(caps) {
-      currentCaps = { ...caps };
-      budgetCapsGridEl.innerHTML = "";
-      Object.keys(currentCaps).sort().forEach((category) => {
-        const wrapper = document.createElement("div");
-        const safeId = `cap_${category.replace(/[^a-z0-9]/gi, "_").toLowerCase()}`;
-        wrapper.innerHTML = `
-          <label for="${safeId}">${category} cap (%)</label>
-          <input id="${safeId}" type="number" min="0.1" max="100" step="0.1" value="${(currentCaps[category] * 100).toFixed(1)}" data-cap-category="${category}">
-        `;
-        budgetCapsGridEl.appendChild(wrapper);
-      });
-      updateBudgetCapsJson();
-      updateManualCategoryOptions();
-    }
+        renderTransactions(profile.recent_transactions || []);
+        renderSubscriptions(profile.subscriptions || []);
+        renderDecisions(profile.subscription_decisions || []);
+        renderMessages(profile.messages || []);
+      }
 
-    function updateBudgetCapsJson() {
-      const nextCaps = {};
-      Array.from(document.querySelectorAll("input[data-cap-category]")).forEach((inputEl) => {
-        const category = inputEl.getAttribute("data-cap-category");
-        const pct = Number(inputEl.value);
-        if (category && pct > 0) {
-          nextCaps[category] = Number((pct / 100).toFixed(4));
+      function renderTransactions(transactions) {
+        const list = document.getElementById("transactions-list");
+        if (!transactions.length) {
+          list.innerHTML = '<li class="empty">No transactions yet. Start with a statement upload.</li>';
+          return;
         }
-      });
-      currentCaps = nextCaps;
-      budgetCapsJsonEl.value = JSON.stringify(currentCaps);
-    }
-
-    budgetCapsGridEl.addEventListener("input", () => {
-      updateBudgetCapsJson();
-      updateManualCategoryOptions();
-    });
-
-    function updateManualCategoryOptions() {
-      const currentValue = manualCategoryEl.value;
-      const categorySet = new Set(["Other", ...Object.keys(currentCaps), ...transactions.map((t) => t.category)]);
-      const categories = Array.from(categorySet).sort();
-      manualCategoryEl.innerHTML = "";
-      categories.forEach((category) => {
-        const option = document.createElement("option");
-        option.value = category;
-        option.textContent = category;
-        manualCategoryEl.appendChild(option);
-      });
-      manualCategoryEl.value = categories.includes(currentValue) ? currentValue : "Other";
-    }
-
-    function renderManualExpenses() {
-      manualListEl.innerHTML = "";
-      manualEmptyEl.style.display = manualExpenses.length === 0 ? "block" : "none";
-
-      manualExpenses.forEach((item, idx) => {
-        const li = document.createElement("li");
-        li.innerHTML = `
-          <span>${item.date} | ${item.description} | ${item.category} | ${money(item.amount)}</span>
-          <button type="button" class="small-btn" data-remove-manual="${idx}">Remove</button>
-        `;
-        manualListEl.appendChild(li);
-      });
-
-      manualJsonEl.value = JSON.stringify(manualExpenses);
-    }
-
-    addManualBtn.addEventListener("click", () => {
-      const date = manualDateEl.value;
-      const description = manualDescriptionEl.value.trim();
-      const category = manualCategoryEl.value || "Other";
-      const amount = Number(manualAmountEl.value || 0);
-
-      if (!date || !description || amount <= 0) {
-        statusEl.textContent = "Manual expense requires date, description, and amount greater than 0.";
-        statusEl.className = "warn";
-        return;
+        list.innerHTML = transactions.map((transaction) => `
+          <li>
+            <div class="row">
+              <strong>${transaction.description}</strong>
+              <strong>${money(transaction.amount)}</strong>
+            </div>
+            <div class="row small muted">
+              <span>${transaction.date} · ${transaction.category}</span>
+              <span class="pill">${transaction.source}</span>
+            </div>
+          </li>
+        `).join("");
       }
 
-      manualExpenses.push({ date, description, category, amount: Number(amount.toFixed(2)) });
-      renderManualExpenses();
-      manualDateEl.value = "";
-      manualDescriptionEl.value = "";
-      manualAmountEl.value = "";
-      statusEl.textContent = "Manual expense added.";
-      statusEl.className = "sub";
-    });
-
-    manualListEl.addEventListener("click", (event) => {
-      const target = event.target;
-      if (!(target instanceof HTMLElement)) return;
-      const index = target.getAttribute("data-remove-manual");
-      if (index === null) return;
-      manualExpenses.splice(Number(index), 1);
-      renderManualExpenses();
-    });
-
-    function updateCategoryFilterOptions() {
-      const currentValue = categoryFilterEl.value;
-      const categories = Array.from(new Set(transactions.map((txn) => txn.category))).sort();
-      categoryFilterEl.innerHTML = '<option value="">All</option>';
-      categories.forEach((category) => {
-        const option = document.createElement("option");
-        option.value = category;
-        option.textContent = category;
-        categoryFilterEl.appendChild(option);
-      });
-      categoryFilterEl.value = categories.includes(currentValue) ? currentValue : "";
-    }
-
-    function compareTransactions(a, b, key, direction) {
-      let left;
-      let right;
-
-      if (key === "amount") {
-        left = Number(a.amount) || 0;
-        right = Number(b.amount) || 0;
-      } else if (key === "date") {
-        left = new Date(a.date).getTime() || 0;
-        right = new Date(b.date).getTime() || 0;
-      } else {
-        left = String(a[key] || "").toLowerCase();
-        right = String(b[key] || "").toLowerCase();
-      }
-
-      if (left < right) return direction === "asc" ? -1 : 1;
-      if (left > right) return direction === "asc" ? 1 : -1;
-      return 0;
-    }
-
-    function renderTransactions() {
-      const selectedCategory = categoryFilterEl.value;
-      const filtered = selectedCategory
-        ? transactions.filter((txn) => txn.category === selectedCategory)
-        : transactions;
-
-      const sorted = [...filtered].sort((a, b) => compareTransactions(a, b, sortState.key, sortState.direction));
-      transactionsBody.innerHTML = "";
-      sorted.forEach((txn) => {
-        const row = document.createElement("tr");
-        row.innerHTML = `
-          <td>${txn.date}</td>
-          <td>${txn.description}</td>
-          <td>${txn.category}</td>
-          <td>${money(txn.amount)}</td>
-        `;
-        transactionsBody.appendChild(row);
-      });
-    }
-
-    function updateSortIndicators() {
-      sortableHeaders.forEach((header) => {
-        const key = header.dataset.sortKey;
-        const arrow = key === sortState.key ? (sortState.direction === "asc" ? " ▲" : " ▼") : "";
-        const baseLabel = header.textContent.replace(" ▲", "").replace(" ▼", "");
-        header.textContent = `${baseLabel}${arrow}`;
-      });
-    }
-
-    sortableHeaders.forEach((header) => {
-      header.addEventListener("click", () => {
-        const key = header.dataset.sortKey;
-        if (sortState.key === key) {
-          sortState.direction = sortState.direction === "asc" ? "desc" : "asc";
-        } else {
-          sortState.key = key;
-          sortState.direction = key === "amount" ? "desc" : "asc";
+      function renderSubscriptions(subscriptions) {
+        const list = document.getElementById("subscriptions-list");
+        if (!subscriptions.length) {
+          list.innerHTML = '<li class="empty">No recurring charges detected yet. Upload more history to improve detection.</li>';
+          return;
         }
-        updateSortIndicators();
-        renderTransactions();
-      });
-    });
-    categoryFilterEl.addEventListener("change", renderTransactions);
+        list.innerHTML = subscriptions.map((subscription) => `
+          <li>
+            <div class="row">
+              <strong>${subscription.merchant}</strong>
+              <span>${money(subscription.monthly_equivalent)}/mo</span>
+            </div>
+            <div class="small muted">${subscription.frequency} · ${subscription.category} · last seen ${subscription.last_seen}</div>
+          </li>
+        `).join("");
+      }
 
-    function renderChart(totals) {
-      const ctx = document.getElementById("category-chart");
-      const labels = Object.keys(totals);
-      const values = Object.values(totals);
-      const total = values.reduce((acc, value) => acc + value, 0);
-      const labelsWithPct = labels.map((label, index) => {
-        const pct = total > 0 ? ((values[index] / total) * 100).toFixed(1) : "0.0";
-        return `${label} (${pct}%)`;
-      });
+      function renderDecisions(decisions) {
+        const list = document.getElementById("decisions-list");
+        if (!decisions.length) {
+          list.innerHTML = '<li class="empty">Use the chat to mark a subscription as keep or cancel.</li>';
+          return;
+        }
+        list.innerHTML = decisions.map((decision) => `
+          <li>
+            <div class="row">
+              <strong>${decision.merchant}</strong>
+              <span class="pill">${decision.decision}</span>
+            </div>
+            <div class="small muted">${decision.created_at}</div>
+          </li>
+        `).join("");
+      }
 
-      if (chart) chart.destroy();
-      chart = new Chart(ctx, {
-        type: "doughnut",
-        data: {
-          labels: labelsWithPct,
-          datasets: [{
-            data: values,
-            backgroundColor: ["#0d9488", "#0ea5e9", "#f97316", "#16a34a", "#f59e0b", "#2563eb", "#ec4899", "#9333ea", "#64748b"],
-          }],
-        },
-        options: {
-          plugins: { legend: { position: "bottom" } },
-        },
-      });
-    }
+      function renderMessages(messages) {
+        const list = document.getElementById("messages-list");
+        if (!messages.length) {
+          list.innerHTML = '<li class="empty">No messages yet. Start with a real expense or a subscription decision.</li>';
+          return;
+        }
+        list.innerHTML = messages.map((message) => `
+          <li class="${message.role}">
+            <span class="pill">${message.role}</span>
+            <span>${message.content}</span>
+          </li>
+        `).join("");
+      }
 
-    renderBudgetCaps(defaultBudgetCaps);
-    renderManualExpenses();
+      document.getElementById("upload-form").addEventListener("submit", async (event) => {
+        event.preventDefault();
+        const status = document.getElementById("upload-status");
+        status.textContent = "Saving statement...";
+        const formData = new FormData(event.currentTarget);
 
-    form.addEventListener("submit", async (event) => {
-      event.preventDefault();
-      statusEl.textContent = "Analyzing statement...";
-      submitBtn.disabled = true;
+        const response = await fetch("/api/upload-statement", {
+          method: "POST",
+          body: formData,
+        });
+        const payload = await response.json();
 
-      try {
-        updateBudgetCapsJson();
-        manualJsonEl.value = JSON.stringify(manualExpenses);
-        const formData = new FormData(form);
-        const response = await fetch("/api/analyze", { method: "POST", body: formData });
-        const data = await response.json();
-        if (!response.ok) throw new Error(data.error || "Failed to analyze statement.");
-
-        document.getElementById("total-spent").textContent = money(data.total_spent);
-        document.getElementById("budget").textContent = money(data.monthly_budget);
-        const remainingEl = document.getElementById("remaining");
-        remainingEl.textContent = money(data.remaining_money);
-        remainingEl.className = data.remaining_money < 0 ? "metric warn" : "metric";
-        const discretionaryEl = document.getElementById("discretionary-remaining");
-        discretionaryEl.textContent = money(data.discretionary_remaining || 0);
-        discretionaryEl.className = (data.discretionary_remaining || 0) < 0 ? "metric warn" : "metric";
-        document.getElementById("normalized-weekly-spend").textContent = money(data.normalized_weekly_spend || 0);
-
-        setList(recommendationsEl, data.recommendations);
-        setTips(tipsEl, data.actionable_tips_details || []);
-        setRecurringExpenses(data.recurring_expenses || [], data.monthly_recurring_total || 0);
-        renderChart(data.category_totals || {});
-        transactions = data.transactions || [];
-        updateCategoryFilterOptions();
-        updateManualCategoryOptions();
-        sortState = { key: "date", direction: "desc" };
-        updateSortIndicators();
-        renderTransactions();
-
-        if (data.applied_budget_caps) {
-          renderBudgetCaps(data.applied_budget_caps);
+        if (!response.ok) {
+          status.textContent = payload.error || "Upload failed.";
+          return;
         }
 
-        resultsEl.style.display = "block";
-        const historyCount = Object.keys(data.history_category_averages || {}).length;
-        statusEl.textContent = historyCount > 0
-          ? `Parsed ${data.transaction_count} expense transactions with history-aware insights.`
-          : `Parsed ${data.transaction_count} expense transactions.`;
-        statusEl.className = "sub";
-      } catch (error) {
-        statusEl.textContent = error.message;
-        statusEl.className = "warn";
-      } finally {
-        submitBtn.disabled = false;
-      }
-    });
-  </script>
+        renderProfile(payload.profile);
+        status.textContent = `Saved ${payload.saved_transactions} expense transactions to your history.`;
+        event.currentTarget.reset();
+      });
+
+      document.getElementById("chat-form").addEventListener("submit", async (event) => {
+        event.preventDefault();
+        const input = document.getElementById("chat-input");
+        const status = document.getElementById("chat-status");
+        status.textContent = "Coach is responding...";
+
+        const response = await fetch("/api/chat", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ message: input.value }),
+        });
+        const payload = await response.json();
+
+        if (!response.ok) {
+          status.textContent = payload.error || "Message failed.";
+          return;
+        }
+
+        renderProfile(payload.profile);
+        status.textContent = payload.reply;
+        input.value = "";
+      });
+    </script>
+  {% endif %}
 </body>
 </html>
