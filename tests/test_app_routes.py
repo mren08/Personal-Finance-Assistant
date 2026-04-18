@@ -88,10 +88,11 @@ class AppRouteTests(unittest.TestCase):
             {"error": "Please choose a CSV file before submitting."},
         )
 
-    def test_readme_mentions_render_deploy_and_public_demo_risk(self):
+    def test_readme_mentions_web_service_flow_and_public_demo_risk(self):
         readme = Path("README.md").read_text(encoding="utf-8")
 
-        self.assertIn("Create a new web service on Render", readme)
+        self.assertIn("New > Web Service", readme)
+        self.assertIn("New > Blueprint", readme)
         self.assertIn("not production-safe for sensitive financial data", readme)
 
 

@@ -25,12 +25,13 @@ Then open `http://localhost:5055`.
 ## Deploy on Render
 
 1. Push the project to GitHub.
-2. Create a new web service on Render.
-3. Connect this repository.
-4. Use the default settings from `render.yaml`, or confirm:
+2. In Render, choose `New > Web Service` and connect this repository.
+3. Enter these settings manually:
    - Build command: `pip install -r requirements.txt`
    - Start command: `gunicorn --bind 0.0.0.0:$PORT app:app`
-5. Wait for the deploy to finish, then open the Render URL.
+4. Wait for the deploy to finish, then open the Render URL.
+
+If you want to deploy with `render.yaml` instead, use Render's `New > Blueprint` flow.
 
 ### Demo Privacy Note
 
