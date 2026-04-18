@@ -12,9 +12,6 @@ from csv_parser import CategorizedTransaction, StatementCsvParser
 from recurrence import RecurringExpenseAnalyzer
 from recommender import BudgetRecommender
 
-app = Flask(__name__)
-
-
 def _parse_float(form, field: str, default: float = 0.0) -> float:
     raw = form.get(field, str(default)).strip()
     if raw == "":
@@ -143,94 +140,106 @@ def _parse_budget_caps(raw_json: str, defaults: dict[str, float]) -> dict[str, f
     return caps
 
 
-@app.route("/")
-def index():
-    return render_template(
-        "index.html",
-        default_budget_caps=BudgetRecommender.default_target_max_ratio(),
-    )
+def create_app() -> Flask:
+    app = Flask(__name__)
 
-
-@app.route("/healthz")
-def healthcheck():
-    return jsonify({"status": "ok"}), 200
-
-
-@app.route("/api/analyze", methods=["POST"])
-def analyze_statement():
-    if "statement" not in request.files:
-        return jsonify({"error": "Missing CSV file input named 'statement'."}), 400
-
-    upload = request.files["statement"]
-    if not upload.filename.lower().endswith(".csv"):
-        return jsonify({"error": "Only CSV statements are supported for this flow."}), 400
-
-    try:
-        monthly_budget = _parse_float(request.form, "monthly_budget", 0.0)
-        fixed_costs = _parse_float(request.form, "fixed_costs", 0.0)
-        goal_name = request.form.get("goal_name", "").strip()
-        goal_amount = _parse_float(request.form, "goal_amount", 0.0)
-        goal_timeline_months = _parse_int(request.form, "goal_timeline_months", 6)
-        manual_expenses = _parse_manual_expenses(request.form.get("manual_expenses_json", "[]"))
-        budget_caps = _parse_budget_caps(
-            request.form.get("budget_caps_json", "{}"),
-            defaults=BudgetRecommender.default_target_max_ratio(),
-        )
-    except ValueError as e:
-        return jsonify({"error": str(e) or "Invalid input values."}), 400
-
-    with tempfile.NamedTemporaryFile(delete=False, suffix=".csv") as tmp:
-        upload.save(tmp.name)
-        temp_path = tmp.name
-
-    try:
-        parser = StatementCsvParser()
-        recommender = BudgetRecommender()
-        recurring_analyzer = RecurringExpenseAnalyzer()
-
-        categorized = parser.parse(temp_path)
-        categorized.extend(manual_expenses)
-        history_transactions, history_averages = _parse_history_bundle(
-            parser=parser,
-            files=request.files.getlist("history_statements"),
-        )
-        recurring_expenses = recurring_analyzer.analyze([*history_transactions, *categorized])
-        monthly_recurring_total = recurring_analyzer.monthly_recurring_total(recurring_expenses)
-        category_totals = parser.category_totals(categorized)
-        total_spent = round(sum(item.amount for item in categorized), 2)
-        recommendation_payload = recommender.build_recommendations(
-            category_totals=category_totals,
-            monthly_budget=monthly_budget,
-            total_spent=total_spent,
-            fixed_costs=fixed_costs,
-            normalized_recurring_monthly_total=monthly_recurring_total,
-            goal_name=goal_name,
-            goal_amount=goal_amount,
-            goal_timeline_months=goal_timeline_months,
-            history_category_averages=history_averages,
-            target_max_ratio_override=budget_caps,
+    @app.route("/")
+    def index():
+        return render_template(
+            "index.html",
+            default_budget_caps=BudgetRecommender.default_target_max_ratio(),
         )
 
-        return jsonify(
-            {
-                "total_spent": total_spent,
-                "monthly_budget": monthly_budget,
-                "fixed_costs": fixed_costs,
-                "transaction_count": len(categorized),
-                "category_totals": category_totals,
-                "history_category_averages": history_averages,
-                "recurring_expenses": [item.to_dict() for item in recurring_expenses[:8]],
-                "monthly_recurring_total": monthly_recurring_total,
-                "transactions": [item.to_dict() for item in categorized],
-                **recommendation_payload,
-            }
-        )
-    except ValueError as e:
-        return jsonify({"error": str(e)}), 400
-    finally:
-        if os.path.exists(temp_path):
-            os.unlink(temp_path)
+    @app.route("/healthz")
+    def healthcheck():
+        return jsonify({"status": "ok"}), 200
+
+    @app.route("/api/analyze", methods=["POST"])
+    def analyze_statement():
+        if "statement" not in request.files:
+            return jsonify({"error": "Missing CSV file input named 'statement'."}), 400
+
+        upload = request.files["statement"]
+        if not upload.filename.lower().endswith(".csv"):
+            return jsonify({"error": "Only CSV statements are supported for this flow."}), 400
+
+        try:
+            monthly_budget = _parse_float(request.form, "monthly_budget", 0.0)
+            fixed_costs = _parse_float(request.form, "fixed_costs", 0.0)
+            goal_name = request.form.get("goal_name", "").strip()
+            goal_amount = _parse_float(request.form, "goal_amount", 0.0)
+            goal_timeline_months = _parse_int(request.form, "goal_timeline_months", 6)
+            manual_expenses = _parse_manual_expenses(request.form.get("manual_expenses_json", "[]"))
+            budget_caps = _parse_budget_caps(
+                request.form.get("budget_caps_json", "{}"),
+                defaults=BudgetRecommender.default_target_max_ratio(),
+            )
+        except ValueError as e:
+            return jsonify({"error": str(e) or "Invalid input values."}), 400
+
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".csv") as tmp:
+            upload.save(tmp.name)
+            temp_path = tmp.name
+
+        try:
+            parser = StatementCsvParser()
+            recommender = BudgetRecommender()
+            recurring_analyzer = RecurringExpenseAnalyzer()
+
+            categorized = parser.parse(temp_path)
+            categorized.extend(manual_expenses)
+            history_transactions, history_averages = _parse_history_bundle(
+                parser=parser,
+                files=request.files.getlist("history_statements"),
+            )
+            recurring_expenses = recurring_analyzer.analyze([*history_transactions, *categorized])
+            monthly_recurring_total = recurring_analyzer.monthly_recurring_total(recurring_expenses)
+            category_totals = parser.category_totals(categorized)
+            total_spent = round(sum(item.amount for item in categorized), 2)
+            recommendation_payload = recommender.build_recommendations(
+                category_totals=category_totals,
+                monthly_budget=monthly_budget,
+                total_spent=total_spent,
+                fixed_costs=fixed_costs,
+                normalized_recurring_monthly_total=monthly_recurring_total,
+                goal_name=goal_name,
+                goal_amount=goal_amount,
+                goal_timeline_months=goal_timeline_months,
+                history_category_averages=history_averages,
+                target_max_ratio_override=budget_caps,
+            )
+
+            return jsonify(
+                {
+                    "total_spent": total_spent,
+                    "monthly_budget": monthly_budget,
+                    "fixed_costs": fixed_costs,
+                    "transaction_count": len(categorized),
+                    "category_totals": category_totals,
+                    "history_category_averages": history_averages,
+                    "recurring_expenses": [item.to_dict() for item in recurring_expenses[:8]],
+                    "monthly_recurring_total": monthly_recurring_total,
+                    "transactions": [item.to_dict() for item in categorized],
+                    **recommendation_payload,
+                }
+            )
+        except ValueError as e:
+            return jsonify({"error": str(e)}), 400
+        finally:
+            if os.path.exists(temp_path):
+                os.unlink(temp_path)
+
+    return app
+
+
+def get_runtime_config() -> dict[str, object]:
+    port = int(os.getenv("PORT", "5055"))
+    debug = os.getenv("FLASK_DEBUG", "1") == "1" and "PORT" not in os.environ
+    return {"host": "0.0.0.0", "port": port, "debug": debug}
+
+
+app = create_app()
 
 
 if __name__ == "__main__":
-    app.run(host="localhost", port=5055, debug=True)
+    app.run(**get_runtime_config())
