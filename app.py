@@ -160,6 +160,8 @@ def create_app() -> Flask:
             return jsonify({"error": "Missing CSV file input named 'statement'."}), 400
 
         upload = request.files["statement"]
+        if not upload.filename.strip():
+            return jsonify({"error": "Please choose a CSV file before submitting."}), 400
         if not upload.filename.lower().endswith(".csv"):
             return jsonify({"error": "Only CSV statements are supported for this flow."}), 400
 
