@@ -2,6 +2,8 @@ import os
 import unittest
 from unittest.mock import patch
 
+from flask import Flask
+
 import app
 
 
@@ -27,6 +29,15 @@ class RuntimeConfigTests(unittest.TestCase):
             config,
             {"host": "0.0.0.0", "port": 5055, "debug": True},
         )
+
+    def test_create_app_exports_routes_for_wsgi_entrypoint(self):
+        flask_app = app.create_app()
+
+        self.assertIsInstance(flask_app, Flask)
+        self.assertIsInstance(app.app, Flask)
+
+        routes = {rule.rule for rule in flask_app.url_map.iter_rules()}
+        self.assertTrue({"/", "/healthz", "/api/analyze"}.issubset(routes))
 
 
 if __name__ == "__main__":
