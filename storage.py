@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import sqlite3
 from collections import defaultdict
 from typing import Any
@@ -53,6 +54,13 @@ class Storage:
                     user_id INTEGER NOT NULL,
                     merchant TEXT NOT NULL,
                     decision TEXT NOT NULL,
+                    created_at TEXT DEFAULT CURRENT_TIMESTAMP
+                );
+
+                CREATE TABLE IF NOT EXISTS pending_actions (
+                    user_id INTEGER PRIMARY KEY,
+                    action_type TEXT NOT NULL,
+                    payload TEXT NOT NULL,
                     created_at TEXT DEFAULT CURRENT_TIMESTAMP
                 );
                 """
@@ -161,6 +169,43 @@ class Storage:
             ).fetchall()
         return [dict(row) for row in rows]
 
+    def set_pending_action(self, user_id: int, action_type: str, payload: dict[str, Any]) -> None:
+        with self._connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO pending_actions (user_id, action_type, payload)
+                VALUES (?, ?, ?)
+                ON CONFLICT(user_id) DO UPDATE SET
+                    action_type = excluded.action_type,
+                    payload = excluded.payload,
+                    created_at = CURRENT_TIMESTAMP
+                """,
+                (user_id, action_type, json.dumps(payload)),
+            )
+
+    def get_pending_action(self, user_id: int) -> dict[str, Any] | None:
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                SELECT action_type, payload, created_at
+                FROM pending_actions
+                WHERE user_id = ?
+                """,
+                (user_id,),
+            ).fetchone()
+        if not row:
+            return None
+        payload = json.loads(row["payload"])
+        return {
+            "type": row["action_type"],
+            "created_at": row["created_at"],
+            **payload,
+        }
+
+    def clear_pending_action(self, user_id: int) -> None:
+        with self._connect() as conn:
+            conn.execute("DELETE FROM pending_actions WHERE user_id = ?", (user_id,))
+
     def get_dashboard_data(self, user_id: int) -> dict[str, Any]:
         with self._connect() as conn:
             transaction_rows = conn.execute(
@@ -197,6 +242,7 @@ class Storage:
             "monthly_recurring_total": monthly_recurring_total,
             "messages": self.list_chat_messages(user_id),
             "subscription_decisions": self.list_subscription_decisions(user_id),
+            "pending_action": self.get_pending_action(user_id),
         }
 
     @staticmethod

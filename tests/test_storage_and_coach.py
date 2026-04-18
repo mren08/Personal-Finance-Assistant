@@ -45,12 +45,36 @@ class StorageTests(unittest.TestCase):
 
 
 class CoachTests(unittest.TestCase):
-    def test_chat_message_can_add_manual_restaurant_transaction(self):
+    def test_chat_message_asks_for_confirmation_when_existing_match_is_uncertain(self):
         coach = OverspendingCoach()
 
         result = coach.process_message(
-            "I ate at Howoo for $50 and paid my friend back on Zelle.",
-            profile={"subscriptions": [], "category_totals": {}},
+            "I spent $50 at Howoo.",
+            profile={
+                "subscriptions": [],
+                "category_totals": {},
+                "transactions": [
+                    {
+                        "date": "2026-04-18",
+                        "description": "HOWOO KOREAN STEAKHOUSE",
+                        "amount": 50.0,
+                        "category": "Dining",
+                        "source": "statement",
+                    }
+                ],
+                "pending_action": None,
+            },
+        )
+
+        self.assertEqual(result["action"]["type"], "confirm_transaction_match")
+        self.assertIn("already included", result["reply"])
+
+    def test_chat_message_can_add_manual_restaurant_transaction_when_no_match_exists(self):
+        coach = OverspendingCoach()
+
+        result = coach.process_message(
+            "I spent $50 at Howoo.",
+            profile={"subscriptions": [], "category_totals": {}, "transactions": [], "pending_action": None},
         )
 
         self.assertEqual(result["action"]["type"], "add_transaction")
@@ -69,6 +93,31 @@ class CoachTests(unittest.TestCase):
         self.assertEqual(result["action"]["type"], "mark_subscription_cancel")
         self.assertEqual(result["action"]["merchant"], "Netflix")
         self.assertIn("Cancel it", result["reply"])
+
+    def test_confirmation_reply_of_no_adds_pending_transaction(self):
+        coach = OverspendingCoach()
+
+        result = coach.process_message(
+            "No, it is not in there yet.",
+            profile={
+                "subscriptions": [],
+                "category_totals": {},
+                "transactions": [],
+                "pending_action": {
+                    "type": "confirm_transaction_match",
+                    "transaction": {
+                        "date": "2026-04-18",
+                        "description": "Howoo",
+                        "amount": 50.0,
+                        "category": "Dining",
+                        "source": "chat_manual",
+                    },
+                },
+            },
+        )
+
+        self.assertEqual(result["action"]["type"], "add_transaction")
+        self.assertIn("adding it now", result["reply"].lower())
 
 
 if __name__ == "__main__":

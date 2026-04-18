@@ -361,10 +361,21 @@ def create_app() -> Flask:
 
         action = result["action"]
         if action["type"] == "add_transaction":
+            storage.clear_pending_action(user_id)
             storage.add_transactions(user_id, [action["transaction"]])
+        elif action["type"] == "confirm_transaction_match":
+            storage.set_pending_action(
+                user_id,
+                "confirm_transaction_match",
+                {"transaction": action["transaction"]},
+            )
+        elif action["type"] == "clear_pending_action":
+            storage.clear_pending_action(user_id)
         elif action["type"] == "mark_subscription_cancel":
+            storage.clear_pending_action(user_id)
             storage.save_subscription_decision(user_id, action["merchant"], "cancel")
         elif action["type"] == "mark_subscription_keep":
+            storage.clear_pending_action(user_id)
             storage.save_subscription_decision(user_id, action["merchant"], "keep")
 
         updated_profile = storage.get_dashboard_data(user_id)

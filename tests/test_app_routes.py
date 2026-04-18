@@ -31,7 +31,7 @@ class AppRouteTests(unittest.TestCase):
         response = self.client.get("/")
 
         self.assertEqual(response.status_code, 200)
-        self.assertIn(b"Cut the waste", response.data)
+        self.assertIn(b"help you achieve your budgeting goals", response.data)
 
     def test_healthcheck_returns_ok(self):
         response = self.client.get("/healthz")
@@ -81,7 +81,7 @@ class AppRouteTests(unittest.TestCase):
         )
 
         self.assertEqual(response.status_code, 200)
-        self.assertIn(b"Overspending Coach", response.data)
+        self.assertIn(b"Personal Finance AI Assistant", response.data)
         self.assertIn(b"Accountability Chat", response.data)
 
     def test_upload_persists_transactions_for_logged_in_user(self):
@@ -112,6 +112,26 @@ class AppRouteTests(unittest.TestCase):
         self.assertEqual(payload["action"]["type"], "add_transaction")
         self.assertIn("messages", payload)
         self.assertGreaterEqual(payload["profile"]["transaction_count"], 1)
+
+    def test_chat_endpoint_asks_before_adding_possible_duplicate_transaction(self):
+        self.client.post("/signup", data={"email": "demo@example.com", "password": "secret123"})
+        self.client.post(
+            "/api/upload-statement",
+            data={"statement": (io.BytesIO("""Transaction Date,Description,Category,Amount
+04/18/2026,HOWOO KOREAN STEAKHOUSE,Dining,-50.00
+""".encode("utf-8")), "statement.csv")},
+            content_type="multipart/form-data",
+        )
+
+        response = self.client.post(
+            "/api/chat",
+            json={"message": "I spent $50 at Howoo."},
+        )
+
+        payload = response.get_json()
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(payload["action"]["type"], "confirm_transaction_match")
+        self.assertEqual(payload["profile"]["transaction_count"], 1)
 
     def test_analyze_rejects_blank_filename(self):
         response = self.client.post(

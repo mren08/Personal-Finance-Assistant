@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Overspending Coach</title>
+  <title>Personal Finance AI Assistant</title>
   <style>
     :root {
       --ink: #1f2937;
@@ -230,9 +230,9 @@
     {% if not logged_in %}
       <section class="hero">
         <div>
-          <div class="eyebrow">Overspending Coach</div>
-          <h1>Cut the waste before it cuts your goals.</h1>
-          <p class="subhead">A blunt accountability partner for overspending, subscriptions, and bad money habits. Upload statements, add missing transactions in chat, and let the system call out what you keep pretending is fine.</p>
+          <div class="eyebrow">Personal Finance AI Assistant</div>
+          <h1>help you achieve your budgeting goals.</h1>
+          <p class="subhead">A personal finance assistant that helps you understand spending, track subscriptions, and add missing transactions through chat without losing your running history.</p>
           <div class="hero-points">
             <div><strong>Persistent profile</strong><br>Keep a running history tied to your account.</div>
             <div><strong>Subscription pressure</strong><br>Surface recurring charges and overlapping services.</div>
@@ -241,7 +241,7 @@
         </div>
         <div class="auth-card">
           <h2>Start tracking</h2>
-          <p>Create an account, upload a statement, then use the chatbox to add missing spend like Zelle, cash, or split bills.</p>
+          <p>Create an account, upload a statement, then use the chatbox to add missing spend like cash, bank transfers, or split bills.</p>
           <form class="form-stack" method="post" action="/signup">
             <div>
               <label for="signup-email">Email</label>
@@ -270,7 +270,7 @@
     {% else %}
       <div class="topbar">
         <div>
-          <div class="eyebrow">Overspending Coach</div>
+          <div class="eyebrow">Personal Finance AI Assistant</div>
           <h1 style="font-size:2.5rem; max-width:none; margin-bottom:6px;">Your spending history now has memory.</h1>
           <p class="subhead" style="margin-bottom:0;">Signed in as {{ user.email }}. Upload fresh data, then use the accountability chat to add missing spend or mark subscriptions you are keeping versus cutting.</p>
         </div>
@@ -282,7 +282,7 @@
       <section class="dashboard">
         <div class="stack">
           <div class="panel">
-            <h2>Overspending Coach</h2>
+            <h2>Personal Finance AI Assistant</h2>
             <div class="metric-grid">
               <div class="metric">
                 <div class="label">Total spent tracked</div>
