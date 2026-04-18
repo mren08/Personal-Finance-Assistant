@@ -74,6 +74,19 @@ class AppRouteTests(unittest.TestCase):
             {"error": "Please choose a CSV file before submitting."},
         )
 
+    def test_analyze_rejects_whitespace_only_filename(self):
+        response = self.client.post(
+            "/api/analyze",
+            data={"statement": (io.BytesIO(b""), "   ")},
+            content_type="multipart/form-data",
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(
+            response.get_json(),
+            {"error": "Please choose a CSV file before submitting."},
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
