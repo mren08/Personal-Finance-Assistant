@@ -226,10 +226,33 @@
       padding: 10px 12px;
       background: #fffdfa;
     }
+    .legend-item, #category-donut-slices path {
+      cursor: pointer;
+    }
     .legend-swatch {
       width: 12px;
       height: 12px;
       border-radius: 999px;
+    }
+    .chart-tooltip {
+      position: fixed;
+      z-index: 50;
+      max-width: 260px;
+      padding: 10px 12px;
+      border-radius: 14px;
+      background: rgba(34, 31, 28, 0.96);
+      color: #fff7f0;
+      font-size: 0.88rem;
+      line-height: 1.4;
+      box-shadow: 0 12px 30px rgba(34, 31, 28, 0.24);
+      pointer-events: none;
+      opacity: 0;
+      transform: translateY(6px);
+      transition: opacity 120ms ease, transform 120ms ease;
+    }
+    .chart-tooltip.visible {
+      opacity: 1;
+      transform: translateY(0);
     }
     .metric {
       background: #f8f2ea;
@@ -609,6 +632,7 @@
   </div>
 
   {% if logged_in %}
+    <div id="chart-tooltip" class="chart-tooltip" aria-hidden="true"></div>
     <script>
       function money(value) {
         return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(value || 0);
@@ -648,6 +672,35 @@
         selector.innerHTML = months.map((month) => `
           <option value="${month.key}" ${month.key === selectedMonth ? "selected" : ""}>${month.label}</option>
         `).join("");
+      }
+
+      function attachTooltipHandlers() {
+        const tooltip = document.getElementById("chart-tooltip");
+        document.querySelectorAll("[data-tooltip]").forEach((element) => {
+          const show = (event) => {
+            tooltip.textContent = element.getAttribute("data-tooltip") || "";
+            tooltip.classList.add("visible");
+            tooltip.setAttribute("aria-hidden", "false");
+            move(event);
+          };
+          const move = (event) => {
+            tooltip.style.left = `${event.clientX + 14}px`;
+            tooltip.style.top = `${event.clientY + 14}px`;
+          };
+          const hide = () => {
+            tooltip.classList.remove("visible");
+            tooltip.setAttribute("aria-hidden", "true");
+          };
+          element.onmouseenter = show;
+          element.onmousemove = move;
+          element.onmouseleave = hide;
+          element.onfocus = () => {
+            tooltip.textContent = element.getAttribute("data-tooltip") || "";
+            tooltip.classList.add("visible");
+            tooltip.setAttribute("aria-hidden", "false");
+          };
+          element.onblur = hide;
+        });
       }
 
       const DONUT_COLORS = ["#ab3b2f", "#d57a32", "#e1b24b", "#6c8a4f", "#3f6f73", "#845a9b", "#bf6d7f"];
@@ -699,6 +752,7 @@
             <strong>${money(item.amount)}</strong>
           </li>
         `).join("");
+        attachTooltipHandlers();
       }
 
       function renderTransactions(transactions) {

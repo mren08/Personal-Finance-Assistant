@@ -27,14 +27,40 @@ class _FallbackAgentClient:
         category_breakdown = context.get("category_breakdown") or []
         subscriptions = context.get("subscriptions") or []
         notes = context.get("agent_notes") or []
+        messages = context.get("messages") or []
         goal = str(financial_profile.get("budgeting_goal") or "").strip()
         available_before_fixed = monthly_summary.get("available_before_fixed")
         leftover_money = monthly_summary.get("leftover_money")
+        recurring_total = float(context.get("monthly_recurring_total") or 0)
+        biggest = category_breakdown[0] if category_breakdown else None
+        strongest_subscription = subscriptions[0] if subscriptions else None
+        note_content = str(notes[0]["content"]).strip() if notes else ""
 
-        if notes and any(token in message for token in {"focus", "notes", "month"}):
+        if any(token in message for token in {"help", "advice", "suggest", "should i", "what should", "how do i", "plan"}):
+            reply = self._advice_reply(
+                month_label=month_label,
+                leftover_money=leftover_money,
+                biggest=biggest,
+                recurring_total=recurring_total,
+                strongest_subscription=strongest_subscription,
+                goal=goal,
+                note_content=note_content,
+            )
+        elif biggest and any(token in message for token in {"why", "where", "problem", "wrong", "overspending"}):
+            reply = (
+                f"The main pressure point in {month_label} is {biggest['category']} at "
+                f"${biggest['amount']:.2f}, which is {biggest['percentage']:.2f}% of your tracked spending. "
+                f"That is where I would push first."
+            )
+        elif strongest_subscription and any(token in message for token in {"cancel", "cut", "keep"}) and "subscription" in message:
+            display_name = _display_merchant(str(strongest_subscription.get("merchant") or ""))
+            reply = (
+                f"If you want the cleanest first cut in {month_label}, start with {display_name} at "
+                f"${float(strongest_subscription.get('monthly_equivalent') or 0):.2f} per month."
+            )
+        elif notes and any(token in message for token in {"focus", "notes", "month"}):
             reply = f"For {month_label}, the main focus is: {notes[0]['content']}"
         elif subscriptions and any(token in message for token in {"subscription", "subscriptions", "recurring"}):
-            recurring_total = float(context.get("monthly_recurring_total") or 0)
             names = ", ".join(_display_merchant(item["merchant"]) for item in subscriptions[:3])
             reply = (
                 f"For {month_label}, I see recurring charges totaling ${recurring_total:.2f} per month, "
@@ -52,9 +78,48 @@ class _FallbackAgentClient:
                 reply = f"{reply} Your stated goal is still: {goal}."
         elif isinstance(available_before_fixed, (int, float)):
             reply = f"You have ${float(available_before_fixed):.2f} available in {month_label} before fixed expenses."
+        elif messages:
+            reply = "I can help with missing spend, category pressure, subscription cuts, or a concrete monthly plan. Ask directly and I will stay grounded in your saved data."
         else:
             reply = FALLBACK_REPLY
         return {"reply": reply, "actions": []}
+
+    @staticmethod
+    def _advice_reply(
+        month_label: str,
+        leftover_money,
+        biggest: dict | None,
+        recurring_total: float,
+        strongest_subscription: dict | None,
+        goal: str,
+        note_content: str,
+    ) -> str:
+        parts = []
+        if biggest:
+            parts.append(
+                f"In {month_label}, your biggest category is {biggest['category']} at "
+                f"${biggest['amount']:.2f} ({biggest['percentage']:.2f}% of tracked spending)."
+            )
+        if strongest_subscription:
+            display_name = _display_merchant(str(strongest_subscription.get("merchant") or ""))
+            parts.append(
+                f"Your clearest recurring cut is {display_name} at "
+                f"${float(strongest_subscription.get('monthly_equivalent') or 0):.2f} per month."
+            )
+        elif recurring_total > 0:
+            parts.append(f"Recurring charges are still costing you ${recurring_total:.2f} per month.")
+        if isinstance(leftover_money, (int, float)):
+            if float(leftover_money) < 0:
+                parts.append(f"You are currently ${abs(float(leftover_money)):.2f} over in {month_label} after fixed expenses.")
+            else:
+                parts.append(f"You still have ${float(leftover_money):.2f} left in {month_label} after fixed expenses.")
+        if goal:
+            parts.append(f"Your stated goal is {goal}.")
+        if note_content:
+            parts.append(f"Current focus: {note_content}")
+        if not parts:
+            return "Give me a concrete question about your spending, subscriptions, or monthly plan and I will answer from your saved data."
+        return " ".join(parts)
 
 
 def build_agent_service() -> AgentService:

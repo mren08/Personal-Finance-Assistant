@@ -306,6 +306,36 @@ class AppRouteTests(unittest.TestCase):
         self.assertEqual(payload["profile"]["recent_transactions"][0]["description"], "Manual expense")
         self.assertEqual(payload["profile"]["recent_transactions"][0]["amount"], 40.0)
 
+    def test_ai_chatbot_can_give_grounded_advice_from_saved_context(self):
+        self.client.post("/signup", data={"email": "demo@example.com", "password": "secret123"})
+        self.client.post(
+            "/api/profile",
+            json={
+                "monthly_income": 3000,
+                "fixed_expenses": 1000,
+                "budgeting_goal": "Spend less on dining",
+            },
+        )
+        recurring_csv = """Transaction Date,Description,Category,Amount
+02/01/2026,NETFLIX.COM,Subscriptions,-15.49
+03/02/2026,NETFLIX.COM,Subscriptions,-15.49
+04/03/2026,NETFLIX.COM,Subscriptions,-15.49
+04/06/2026,Restaurant Row,Dining,-120.00
+"""
+        self.client.post(
+            "/api/upload-statement",
+            data={"statement": (io.BytesIO(recurring_csv.encode("utf-8")), "statement.csv")},
+            content_type="multipart/form-data",
+        )
+
+        response = self.client.post("/api/chat", json={"message": "What should I cut this month?"})
+        payload = response.get_json()
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("Dining", payload["reply"])
+        self.assertIn("Netflix", payload["reply"])
+        self.assertIn("Spend less on dining", payload["reply"])
+
     def test_logged_in_dashboard_shows_income_and_leftover_money_sections(self):
         self.client.post(
             "/signup",
@@ -324,6 +354,7 @@ class AppRouteTests(unittest.TestCase):
         self.assertIn(b"category-donut-chart", response.data)
         self.assertIn(b"month-selector", response.data)
         self.assertIn(b"data-tooltip=", response.data)
+        self.assertIn(b"chart-tooltip", response.data)
 
     def test_analyze_rejects_blank_filename(self):
         response = self.client.post(
