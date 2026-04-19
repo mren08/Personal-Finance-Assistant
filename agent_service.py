@@ -1,4 +1,6 @@
 import json
+import os
+import re
 from collections.abc import Mapping
 
 
@@ -61,23 +63,69 @@ def _summarize_context(payload: dict) -> str:
     return "\n".join(lines)
 
 
+def _parse_json_response(text: str) -> dict:
+    raw = str(text or "").strip()
+    if not raw:
+        raise ValueError("Empty model response.")
+
+    try:
+        parsed = json.loads(raw)
+        if isinstance(parsed, Mapping):
+            return dict(parsed)
+    except json.JSONDecodeError:
+        pass
+
+    fenced = re.search(r"```(?:json)?\s*(\{.*\})\s*```", raw, re.DOTALL)
+    if fenced:
+        parsed = json.loads(fenced.group(1))
+        if isinstance(parsed, Mapping):
+            return dict(parsed)
+
+    object_match = re.search(r"(\{.*\})", raw, re.DOTALL)
+    if object_match:
+        parsed = json.loads(object_match.group(1))
+        if isinstance(parsed, Mapping):
+            return dict(parsed)
+
+    raise ValueError("Model response did not contain valid JSON.")
+
+
+def _candidate_models() -> list[str]:
+    preferred = str(os.getenv("OPENAI_MODEL", "")).strip()
+    models = [preferred] if preferred else []
+    models.extend(["gpt-5-mini", "gpt-4.1-mini"])
+
+    deduped = []
+    for model in models:
+        if model and model not in deduped:
+            deduped.append(model)
+    return deduped
+
+
 def build_openai_llm_client():
     from openai import OpenAI
 
     client = OpenAI()
 
     def call_agent(payload: dict) -> dict:
-        response = client.responses.create(
-            model="gpt-5-mini",
-            input=[
-                {
-                    "role": "system",
-                    "content": SYSTEM_PROMPT,
-                },
-                {"role": "user", "content": _summarize_context(payload)},
-            ],
-        )
-        return json.loads(response.output_text)
+        last_error = None
+        for model in _candidate_models():
+            try:
+                response = client.responses.create(
+                    model=model,
+                    input=[
+                        {
+                            "role": "system",
+                            "content": SYSTEM_PROMPT,
+                        },
+                        {"role": "user", "content": _summarize_context(payload)},
+                    ],
+                )
+                return _parse_json_response(getattr(response, "output_text", ""))
+            except Exception as exc:
+                last_error = exc
+                continue
+        raise RuntimeError("OpenAI agent request failed.") from last_error
 
     return call_agent
 

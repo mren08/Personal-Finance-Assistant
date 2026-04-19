@@ -3,7 +3,7 @@ import types
 import unittest
 from unittest.mock import patch
 
-from agent_service import AgentService, _summarize_context
+from agent_service import AgentService, _parse_json_response, _summarize_context
 from financial_state import build_monthly_summary
 
 
@@ -81,6 +81,15 @@ class FinancialStateTests(unittest.TestCase):
 
 
 class AgentServiceTests(unittest.TestCase):
+    def test_parse_json_response_accepts_fenced_json(self):
+        parsed = _parse_json_response(
+            """```json
+            {"reply":"ok","actions":[]}
+            ```"""
+        )
+
+        self.assertEqual(parsed, {"reply": "ok", "actions": []})
+
     def test_context_summary_includes_recent_messages_and_subscription_context(self):
         summary = _summarize_context(
             {
@@ -239,3 +248,29 @@ class AgentServiceTests(unittest.TestCase):
         self.assertEqual(captured["model"], "gpt-5-mini")
         self.assertIn("Behave like a thoughtful, conversational assistant", captured["input"][0]["content"])
         self.assertIn("Latest user message: Should I keep Netflix?", captured["input"][1]["content"])
+
+    def test_openai_client_falls_back_to_second_model_when_first_fails(self):
+        calls = []
+
+        class FakeResponses:
+            def create(self, **kwargs):
+                calls.append(kwargs["model"])
+                if kwargs["model"] == "gpt-5-mini":
+                    raise RuntimeError("model unavailable")
+                return type("FakeResponse", (), {"output_text": '```json {"reply":"ok","actions":[]} ```'})()
+
+        class FakeOpenAI:
+            def __init__(self):
+                self.responses = FakeResponses()
+
+        fake_module = types.ModuleType("openai")
+        fake_module.OpenAI = FakeOpenAI
+
+        with patch.dict(sys.modules, {"openai": fake_module}), patch.dict("os.environ", {}, clear=False):
+            from agent_service import build_openai_llm_client
+
+            client = build_openai_llm_client()
+            result = client({"message": "Hi", "context": {}, "allowed_action_types": []})
+
+        self.assertEqual(calls, ["gpt-5-mini", "gpt-4.1-mini"])
+        self.assertEqual(result, {"reply": "ok", "actions": []})
