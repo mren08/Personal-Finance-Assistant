@@ -98,13 +98,16 @@ class AgentService:
         self.llm_client = llm_client
 
     def run_chat_turn(self, message: str, agent_context: dict) -> dict:
-        response = self.llm_client(
-            {
-                "message": message,
-                "context": agent_context,
-                "allowed_action_types": list(self.ALLOWED_ACTION_TYPES),
-            }
-        )
+        try:
+            response = self.llm_client(
+                {
+                    "message": message,
+                    "context": agent_context,
+                    "allowed_action_types": list(self.ALLOWED_ACTION_TYPES),
+                }
+            )
+        except Exception:
+            return {"reply": FALLBACK_REPLY, "actions": []}
         if not isinstance(response, Mapping):
             return {"reply": FALLBACK_REPLY, "actions": []}
 

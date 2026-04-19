@@ -50,6 +50,11 @@ class DeploymentFileTests(unittest.TestCase):
         self.assertIn("startCommand: gunicorn --bind 0.0.0.0:$PORT app:app", render_yaml)
         self.assertIn("healthCheckPath: /healthz", render_yaml)
 
+    def test_requirements_include_openai_sdk_for_render_agent_mode(self):
+        requirements = Path("requirements.txt").read_text(encoding="utf-8")
+
+        self.assertIn("openai", requirements.lower())
+
 
 if __name__ == "__main__":
     unittest.main()

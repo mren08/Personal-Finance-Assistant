@@ -190,6 +190,25 @@ class AgentServiceTests(unittest.TestCase):
             },
         )
 
+    def test_agent_service_returns_safe_default_when_llm_client_raises(self):
+        def exploding_llm(payload):
+            raise RuntimeError("network failure")
+
+        service = AgentService(llm_client=exploding_llm)
+
+        result = service.run_chat_turn(
+            message="Should I keep Netflix?",
+            agent_context={"monthly_summary": {"discretionary_remaining": 25}},
+        )
+
+        self.assertEqual(
+            result,
+            {
+                "reply": "I couldn't produce a reliable coaching response right now.",
+                "actions": [],
+            },
+        )
+
     def test_openai_client_uses_conversational_system_prompt(self):
         captured = {}
 
