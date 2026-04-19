@@ -301,6 +301,34 @@ class AppRouteTests(unittest.TestCase):
             [decision["merchant"] for decision in payload["profile"]["subscription_decisions"]],
         )
 
+    def test_ai_chatbot_can_answer_follow_up_about_called_out_subscription(self):
+        self.client.post("/signup", data={"email": "demo@example.com", "password": "secret123"})
+        self.client.post(
+            "/api/profile",
+            json={
+                "monthly_income": 3000,
+                "fixed_expenses": 1000,
+                "budgeting_goal": "Trim subscriptions",
+            },
+        )
+        recurring_csv = """Transaction Date,Description,Category,Amount
+02/01/2026,NETFLIX.COM,Subscriptions,-15.49
+03/02/2026,NETFLIX.COM,Subscriptions,-15.49
+04/03/2026,NETFLIX.COM,Subscriptions,-15.49
+"""
+        self.client.post(
+            "/api/upload-statement",
+            data={"statement": (io.BytesIO(recurring_csv.encode("utf-8")), "statement.csv")},
+            content_type="multipart/form-data",
+        )
+
+        response = self.client.post("/api/chat", json={"message": "Should I keep it?"})
+        payload = response.get_json()
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("Netflix", payload["reply"])
+        self.assertTrue("keep" in payload["reply"].lower() or "cut" in payload["reply"].lower())
+
     def test_ai_chatbot_can_add_generic_spend_without_merchant_name(self):
         self.client.post("/signup", data={"email": "demo@example.com", "password": "secret123"})
 

@@ -35,11 +35,20 @@ class _FallbackAgentClient:
         recurring_total = float(context.get("monthly_recurring_total") or 0)
         biggest = category_breakdown[0] if category_breakdown else None
         strongest_subscription = subscriptions[0] if subscriptions else None
+        referenced_subscription = _resolve_referenced_subscription(message, context)
         note_content = str(notes[0]["content"]).strip() if notes else ""
         topic_reply = _category_topic_reply(message, context)
 
         if topic_reply:
             reply = topic_reply
+        elif referenced_subscription and any(token in message for token in {"should i keep", "keep it", "cancel it", "should i cancel"}):
+            reply = self._subscription_recommendation(
+                referenced_subscription,
+                month_label=month_label,
+                leftover_money=leftover_money,
+                biggest=biggest,
+                goal=goal,
+            )
         elif any(token in message for token in {"help", "advice", "suggest", "should i", "what should", "how do i", "plan"}):
             reply = self._advice_reply(
                 month_label=month_label,
@@ -125,6 +134,37 @@ class _FallbackAgentClient:
             return "Give me a concrete question about your spending, subscriptions, or monthly plan and I will answer from your saved data."
         return " ".join(parts)
 
+    @staticmethod
+    def _subscription_recommendation(
+        subscription: dict,
+        month_label: str,
+        leftover_money,
+        biggest: dict | None,
+        goal: str,
+    ) -> str:
+        display_name = _display_merchant(str(subscription.get("merchant") or "that subscription"))
+        monthly_cost = float(subscription.get("monthly_equivalent") or 0)
+        category = str(subscription.get("category") or "Recurring")
+        if isinstance(leftover_money, (int, float)) and float(leftover_money) < 0:
+            return (
+                f"I would cut {display_name}. It is costing about ${monthly_cost:.2f} per month, "
+                f"and you are already over budget in {month_label}. Keeping it only makes sense if it is genuinely higher priority than the rest of your cuts."
+            )
+        if biggest and category.lower() == str(biggest.get("category") or "").lower():
+            return (
+                f"I would seriously question keeping {display_name}. It is about ${monthly_cost:.2f} per month "
+                f"and it sits inside your biggest pressure category for {month_label}."
+            )
+        if goal:
+            return (
+                f"Keep {display_name} only if you use it enough to justify about ${monthly_cost:.2f} per month. "
+                f"Given your goal to {goal.lower()}, it is a reasonable cut if usage is inconsistent."
+            )
+        return (
+            f"Keep {display_name} only if you use it consistently. It is costing about ${monthly_cost:.2f} per month, "
+            f"so if it is easy to pause, I would lean toward cutting it."
+        )
+
 
 def build_agent_service() -> AgentService:
     if os.getenv("OPENAI_API_KEY"):
@@ -199,6 +239,33 @@ def _category_topic_reply(message: str, context: dict) -> str | None:
     month_phrase = f"across {len(overall_months)} uploaded months"
     topic_label = chosen_topic.title()
     return f"Your average monthly {chosen_topic} spend is ${average:.2f} {month_phrase}, with ${total:.2f} total tracked in {topic_label}."
+
+
+def _resolve_referenced_subscription(message: str, context: dict) -> dict | None:
+    lowered = str(message).lower()
+    subscriptions = context.get("subscriptions") or []
+    if not subscriptions:
+        return None
+
+    for subscription in subscriptions:
+        merchant = str(subscription.get("merchant") or "")
+        merchant_tokens = {token for token in re.split(r"[^a-z0-9]+", merchant.lower()) if len(token) > 1}
+        if merchant_tokens and merchant_tokens.intersection({token for token in re.split(r"[^a-z0-9]+", lowered) if token}):
+            return subscription
+
+    if not any(token in lowered for token in {"it", "that", "this"}):
+        return subscriptions[0] if len(subscriptions) == 1 else None
+
+    recent_messages = list(context.get("messages") or [])[-6:]
+    for message_row in reversed(recent_messages):
+        content = str(message_row.get("content") or "").lower()
+        for subscription in subscriptions:
+            merchant = str(subscription.get("merchant") or "")
+            merchant_tokens = {token for token in re.split(r"[^a-z0-9]+", merchant.lower()) if len(token) > 1}
+            if merchant_tokens and merchant_tokens.intersection({token for token in re.split(r"[^a-z0-9]+", content) if token}):
+                return subscription
+
+    return subscriptions[0] if len(subscriptions) == 1 else None
 
 
 def _build_month_focus_note(profile: dict, summary: dict) -> str:
