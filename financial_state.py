@@ -18,8 +18,8 @@ def build_monthly_summary(
     rounded_fixed_expenses = _round_money(fixed_expenses)
     rounded_tracked_spending = _round_money(tracked_spending)
     rounded_recurring_total = _round_money(recurring_monthly_total)
-    leftover_money = rounded_income - rounded_tracked_spending
-    discretionary_remaining = (
+    available_before_fixed = rounded_income - rounded_tracked_spending
+    leftover_money = (
         rounded_income - rounded_fixed_expenses - rounded_tracked_spending
     )
 
@@ -28,6 +28,7 @@ def build_monthly_summary(
         "fixed_expenses": float(rounded_fixed_expenses),
         "tracked_spending": float(rounded_tracked_spending),
         "recurring_monthly_total": float(rounded_recurring_total),
+        "available_before_fixed": float(available_before_fixed),
         "leftover_money": float(leftover_money),
-        "discretionary_remaining": float(discretionary_remaining),
+        "discretionary_remaining": float(leftover_money),
     }

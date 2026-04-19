@@ -23,33 +23,17 @@ class _FallbackAgentClient:
         monthly_summary = context.get("monthly_summary") or {}
         financial_profile = context.get("financial_profile") or {}
         goal = str(financial_profile.get("budgeting_goal") or "").strip()
-        discretionary_remaining = monthly_summary.get("discretionary_remaining")
+        available_before_fixed = monthly_summary.get("available_before_fixed")
         leftover_money = monthly_summary.get("leftover_money")
-        note_content = ""
-
-        if isinstance(discretionary_remaining, (int, float)):
-            reply = (
-                f"You have ${float(discretionary_remaining):.2f} left after fixed expenses this month."
-            )
-            note_content = reply
+        if isinstance(leftover_money, (int, float)):
+            reply = f"You have ${float(leftover_money):.2f} left this month after fixed expenses."
             if goal:
                 reply = f"{reply} That only matters if you still act on: {goal}."
-        elif isinstance(leftover_money, (int, float)):
-            reply = f"You have ${float(leftover_money):.2f} left this month before fixed-expense pressure."
-            note_content = reply
+        elif isinstance(available_before_fixed, (int, float)):
+            reply = f"You have ${float(available_before_fixed):.2f} available before fixed expenses this month."
         else:
             reply = FALLBACK_REPLY
-
-        actions = []
-        if note_content:
-            actions.append(
-                {
-                    "type": "save_agent_note",
-                    "note_type": "monthly_focus",
-                    "content": note_content,
-                }
-            )
-        return {"reply": reply, "actions": actions}
+        return {"reply": reply, "actions": []}
 
 
 def build_agent_service() -> AgentService:
@@ -59,6 +43,85 @@ def build_agent_service() -> AgentService:
         except Exception:
             pass
     return AgentService(llm_client=_FallbackAgentClient())
+
+
+def _current_month_key() -> str:
+    return datetime.now(UTC).strftime("%Y-%m")
+
+
+def _current_month_label() -> str:
+    return datetime.now(UTC).strftime("%B %Y")
+
+
+def _display_merchant(name: str) -> str:
+    cleaned = str(name).replace(".COM", "").replace(".com", "").strip()
+    if cleaned.isupper():
+        return cleaned.title()
+    return cleaned
+
+
+def _build_month_focus_note(profile: dict, summary: dict) -> str:
+    segments = [
+        f"{_current_month_label()}: left after fixed expenses is ${summary['leftover_money']:.2f}."
+    ]
+
+    category_breakdown = profile.get("category_breakdown") or []
+    if category_breakdown:
+        biggest = category_breakdown[0]
+        segments.append(
+            f"Biggest category is {biggest['category']} at ${biggest['amount']:.2f} ({biggest['percentage']:.2f}% of tracked spending)."
+        )
+
+    subscriptions = profile.get("subscriptions") or []
+    recurring_total = float(profile.get("monthly_recurring_total") or 0)
+    if subscriptions:
+        top_names = ", ".join(_display_merchant(item["merchant"]) for item in subscriptions[:3])
+        segments.append(
+            f"Recurring charges are ${recurring_total:.2f}/month across {len(subscriptions)} services, led by {top_names}."
+        )
+
+    goal = str((profile.get("financial_profile") or {}).get("budgeting_goal") or "").strip()
+    if goal:
+        segments.append(f"Budget goal: {goal}.")
+
+    return " ".join(segments)
+
+
+def _build_proactive_chat_message(profile: dict) -> str | None:
+    category_breakdown = profile.get("category_breakdown") or []
+    subscriptions = profile.get("subscriptions") or []
+    monthly_summary = profile.get("monthly_summary") or {}
+    if not category_breakdown and not subscriptions and not monthly_summary:
+        return None
+
+    parts = []
+    leftover_money = monthly_summary.get("leftover_money")
+    if isinstance(leftover_money, (int, float)):
+        parts.append(f"You have ${float(leftover_money):.2f} left this month after fixed expenses.")
+
+    if category_breakdown:
+        biggest = category_breakdown[0]
+        parts.append(
+            f"Your biggest category is {biggest['category']} at ${biggest['amount']:.2f} ({biggest['percentage']:.2f}%)."
+        )
+
+    if subscriptions:
+        recurring_total = float(profile.get("monthly_recurring_total") or 0)
+        top_names = ", ".join(_display_merchant(item["merchant"]) for item in subscriptions[:3])
+        parts.append(
+            f"I noticed recurring charges totaling ${recurring_total:.2f}/month across {len(subscriptions)} services, including {top_names}. Are you sure you want to keep those?"
+        )
+
+    if not parts:
+        return None
+    return " ".join(parts)
+
+
+def _extract_monthly_focus_content(actions: list[dict]) -> str | None:
+    for action in reversed(actions):
+        if action.get("type") == "save_agent_note" and action.get("note_type") == "monthly_focus":
+            return action.get("content")
+    return None
 
 def _parse_float(form, field: str, default: float = 0.0) -> float:
     raw = form.get(field, str(default)).strip()
@@ -213,6 +276,18 @@ def create_app() -> Flask:
             raise PermissionError("Sign in first.")
         return user_id
 
+    def maybe_seed_proactive_chat(user_id: int, profile: dict) -> None:
+        storage = get_storage()
+        if storage.list_chat_messages(user_id):
+            return
+
+        if not profile.get("transaction_count"):
+            return
+
+        proactive_message = _build_proactive_chat_message(profile)
+        if proactive_message:
+            storage.add_chat_message(user_id, "assistant", proactive_message)
+
     def refresh_user_summary(user_id: int) -> dict:
         storage = get_storage()
         profile = storage.get_dashboard_data(user_id)
@@ -229,7 +304,7 @@ def create_app() -> Flask:
         )
         storage.save_monthly_summary(
             user_id,
-            month_key=datetime.now(UTC).strftime("%Y-%m"),
+            month_key=_current_month_key(),
             income=summary["monthly_income"],
             fixed_expenses=summary["fixed_expenses"],
             tracked_spending=summary["tracked_spending"],
@@ -237,22 +312,35 @@ def create_app() -> Flask:
             leftover_money=summary["leftover_money"],
             discretionary_remaining=summary["discretionary_remaining"],
             summary_text=(
-                f"Left this month: ${summary['leftover_money']:.2f}. "
-                f"Discretionary remaining after fixed expenses: ${summary['discretionary_remaining']:.2f}."
+                f"Left this month after fixed expenses: ${summary['leftover_money']:.2f}. "
+                f"Available before fixed expenses: ${summary['available_before_fixed']:.2f}."
             ),
         )
         return storage.get_dashboard_data(user_id)
+
+    def update_current_month_focus_note(user_id: int, profile: dict, content: str | None = None) -> dict:
+        summary = profile.get("monthly_summary") or {}
+        if not summary:
+            return profile
+
+        get_storage().replace_agent_note(
+            user_id,
+            note_type=f"{_current_month_label()} focus",
+            content=content or _build_month_focus_note(profile, summary),
+        )
+        return get_storage().get_dashboard_data(user_id)
 
     def apply_agent_actions(user_id: int, actions: list[dict]) -> None:
         storage = get_storage()
         for action in actions:
             action_type = action.get("type")
             if action_type == "save_agent_note":
-                storage.save_agent_note(
-                    user_id,
-                    note_type=action["note_type"],
-                    content=action["content"],
-                )
+                if action["note_type"] != "monthly_focus":
+                    storage.save_agent_note(
+                        user_id,
+                        note_type=action["note_type"],
+                        content=action["content"],
+                    )
             elif action_type == "save_monthly_income":
                 current_profile = storage.get_financial_profile(user_id) or {}
                 storage.upsert_financial_profile(
@@ -302,6 +390,9 @@ def create_app() -> Flask:
             user = get_storage().get_user(user_id)
             if user:
                 profile = refresh_user_summary(user_id)
+                profile = update_current_month_focus_note(user_id, profile)
+                maybe_seed_proactive_chat(user_id, profile)
+                profile = get_storage().get_dashboard_data(user_id)
             else:
                 session.pop("user_id", None)
 
@@ -358,6 +449,7 @@ def create_app() -> Flask:
             budgeting_goal=str(payload.get("budgeting_goal", "")).strip(),
         )
         profile = refresh_user_summary(user_id)
+        profile = update_current_month_focus_note(user_id, profile)
         return jsonify({"profile": profile})
 
     @app.route("/api/analyze", methods=["POST"])
@@ -478,11 +570,15 @@ def create_app() -> Flask:
                 message="I uploaded a new statement. Update my coaching notes.",
                 agent_context=profile,
             )
+            monthly_focus_content = _extract_monthly_focus_content(agent_result["actions"])
             apply_agent_actions(user_id, agent_result["actions"])
+            profile = refresh_user_summary(user_id)
+            profile = update_current_month_focus_note(user_id, profile, monthly_focus_content)
+            maybe_seed_proactive_chat(user_id, profile)
             return jsonify(
                 {
                     "saved_transactions": len(transactions),
-                    "profile": refresh_user_summary(user_id),
+                    "profile": get_storage().get_dashboard_data(user_id),
                 }
             )
         except ValueError as exc:
@@ -512,6 +608,7 @@ def create_app() -> Flask:
 
         profile = refresh_user_summary(user_id)
         agent_result = get_agent_service().run_chat_turn(message=message, agent_context=profile)
+        monthly_focus_content = _extract_monthly_focus_content(agent_result["actions"])
         apply_agent_actions(user_id, agent_result["actions"])
 
         reply = agent_result["reply"] or heuristic_result["reply"]
@@ -519,6 +616,7 @@ def create_app() -> Flask:
         storage.add_chat_message(user_id, "assistant", reply)
 
         updated_profile = refresh_user_summary(user_id)
+        updated_profile = update_current_month_focus_note(user_id, updated_profile, monthly_focus_content)
         return jsonify(
             {
                 "reply": reply,

@@ -13,8 +13,8 @@ class FinancialStateTests(unittest.TestCase):
             recurring_monthly_total=90,
         )
 
-        self.assertEqual(summary["leftover_money"], 2750)
-        self.assertEqual(summary["discretionary_remaining"], 950)
+        self.assertEqual(summary["available_before_fixed"], 2750)
+        self.assertEqual(summary["leftover_money"], 950)
         self.assertEqual(summary["recurring_monthly_total"], 90)
 
     def test_build_monthly_summary_reconciles_derived_values_with_rounded_inputs(self):
@@ -28,14 +28,14 @@ class FinancialStateTests(unittest.TestCase):
         self.assertEqual(summary["monthly_income"], 100.01)
         self.assertEqual(summary["fixed_expenses"], 20.01)
         self.assertEqual(summary["tracked_spending"], 30.01)
-        self.assertEqual(summary["leftover_money"], 70.0)
-        self.assertEqual(summary["discretionary_remaining"], 49.99)
+        self.assertEqual(summary["available_before_fixed"], 70.0)
+        self.assertEqual(summary["leftover_money"], 49.99)
         self.assertEqual(
-            summary["leftover_money"],
+            summary["available_before_fixed"],
             round(summary["monthly_income"] - summary["tracked_spending"], 2),
         )
         self.assertEqual(
-            summary["discretionary_remaining"],
+            summary["leftover_money"],
             round(
                 summary["monthly_income"]
                 - summary["fixed_expenses"]
@@ -52,8 +52,8 @@ class FinancialStateTests(unittest.TestCase):
             recurring_monthly_total=85,
         )
 
-        self.assertEqual(summary["leftover_money"], -200)
-        self.assertEqual(summary["discretionary_remaining"], -1100)
+        self.assertEqual(summary["available_before_fixed"], -200)
+        self.assertEqual(summary["leftover_money"], -1100)
 
     def test_build_monthly_summary_treats_recurring_monthly_total_as_informational(self):
         baseline = build_monthly_summary(
@@ -69,10 +69,10 @@ class FinancialStateTests(unittest.TestCase):
             recurring_monthly_total=250,
         )
 
-        self.assertEqual(with_recurring["leftover_money"], baseline["leftover_money"])
+        self.assertEqual(with_recurring["available_before_fixed"], baseline["available_before_fixed"])
         self.assertEqual(
-            with_recurring["discretionary_remaining"],
-            baseline["discretionary_remaining"],
+            with_recurring["leftover_money"],
+            baseline["leftover_money"],
         )
         self.assertEqual(with_recurring["recurring_monthly_total"], 250)
 

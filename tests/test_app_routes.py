@@ -2,6 +2,7 @@ import io
 import os
 import tempfile
 import unittest
+from datetime import UTC, datetime
 from pathlib import Path
 from unittest.mock import patch
 
@@ -83,7 +84,7 @@ class AppRouteTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertIn(b"Personal Finance AI Assistant", response.data)
-        self.assertIn(b"Accountability Chat", response.data)
+        self.assertIn(b"AI Chatbot", response.data)
 
     def test_upload_persists_transactions_for_logged_in_user(self):
         self.client.post("/signup", data={"email": "demo@example.com", "password": "secret123"})
@@ -150,8 +151,12 @@ class AppRouteTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(payload["profile"]["financial_profile"]["monthly_income"], 4200)
         self.assertEqual(payload["profile"]["financial_profile"]["fixed_expenses"], 1800)
-        self.assertEqual(payload["profile"]["monthly_summary"]["leftover_money"], 4200)
-        self.assertEqual(payload["profile"]["monthly_summary"]["discretionary_remaining"], 2400)
+        self.assertEqual(payload["profile"]["monthly_summary"]["available_before_fixed"], 4200)
+        self.assertEqual(payload["profile"]["monthly_summary"]["leftover_money"], 2400)
+        self.assertEqual(
+            payload["profile"]["agent_notes"][0]["note_type"],
+            f"{datetime.now(UTC).strftime('%B %Y')} focus",
+        )
 
     def test_chat_route_persists_agent_note_from_llm_result(self):
         self.client.post("/signup", data={"email": "demo@example.com", "password": "secret123"})
@@ -184,7 +189,42 @@ class AppRouteTests(unittest.TestCase):
         payload = response.get_json()
         self.assertEqual(response.status_code, 200)
         self.assertEqual(payload["reply"], "You have $2400 left this month.")
-        self.assertEqual(payload["profile"]["agent_notes"][0]["note_type"], "monthly_focus")
+        self.assertIn(
+            "Dining should stay under control if the user wants buffer.",
+            [note["content"] for note in payload["profile"]["agent_notes"]],
+        )
+
+    def test_upload_generates_proactive_ai_chatbot_message_with_recurring_and_category_context(self):
+        self.client.post("/signup", data={"email": "demo@example.com", "password": "secret123"})
+        self.client.post(
+            "/api/profile",
+            json={
+                "monthly_income": 3000,
+                "fixed_expenses": 1000,
+                "budgeting_goal": "Cut back on subscriptions",
+            },
+        )
+        recurring_csv = """Transaction Date,Description,Category,Amount
+02/01/2026,NETFLIX.COM,Subscriptions,-15.49
+03/02/2026,NETFLIX.COM,Subscriptions,-15.49
+04/03/2026,NETFLIX.COM,Subscriptions,-15.49
+04/06/2026,RESTAURANT ROW,Dining,-120.00
+"""
+
+        response = self.client.post(
+            "/api/upload-statement",
+            data={"statement": (io.BytesIO(recurring_csv.encode("utf-8")), "statement.csv")},
+            content_type="multipart/form-data",
+        )
+
+        payload = response.get_json()
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("AI Chatbot", self.client.get("/").data.decode("utf-8"))
+        self.assertGreaterEqual(len(payload["profile"]["messages"]), 1)
+        assistant_message = payload["profile"]["messages"][-1]["content"]
+        self.assertIn("recurring charges", assistant_message.lower())
+        self.assertIn("Dining", assistant_message)
+        self.assertIn("Netflix", assistant_message)
 
     def test_logged_in_dashboard_shows_income_and_leftover_money_sections(self):
         self.client.post(
@@ -200,6 +240,8 @@ class AppRouteTests(unittest.TestCase):
         self.assertIn(b"Fixed expenses", response.data)
         self.assertIn(b"Left this month", response.data)
         self.assertIn(b"Agent notes", response.data)
+        self.assertIn(b"Category breakdown", response.data)
+        self.assertIn(b"category-donut-chart", response.data)
 
     def test_analyze_rejects_blank_filename(self):
         response = self.client.post(

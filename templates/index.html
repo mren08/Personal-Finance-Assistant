@@ -163,8 +163,62 @@
     }
     .summary-grid {
       display: grid;
-      grid-template-columns: repeat(3, 1fr);
+      grid-template-columns: repeat(4, 1fr);
       gap: 12px;
+    }
+    .chart-panel {
+      display: grid;
+      grid-template-columns: 220px 1fr;
+      gap: 18px;
+      align-items: center;
+    }
+    .chart-wrap {
+      display: flex;
+      justify-content: center;
+      align-items: center;
+    }
+    .chart-wrap svg {
+      width: 220px;
+      height: 220px;
+      overflow: visible;
+    }
+    .chart-center {
+      fill: var(--card);
+      stroke: #efe4d3;
+      stroke-width: 2;
+    }
+    .chart-total {
+      font-size: 0.9rem;
+      fill: var(--muted);
+      text-anchor: middle;
+    }
+    .chart-total-amount {
+      font-size: 1.2rem;
+      font-weight: 700;
+      fill: var(--ink);
+      text-anchor: middle;
+    }
+    .legend {
+      list-style: none;
+      margin: 0;
+      padding: 0;
+      display: grid;
+      gap: 10px;
+    }
+    .legend-item {
+      display: grid;
+      grid-template-columns: auto 1fr auto;
+      gap: 10px;
+      align-items: center;
+      border: 1px solid #efe4d3;
+      border-radius: 14px;
+      padding: 10px 12px;
+      background: #fffdfa;
+    }
+    .legend-swatch {
+      width: 12px;
+      height: 12px;
+      border-radius: 999px;
     }
     .metric {
       background: #f8f2ea;
@@ -232,7 +286,7 @@
     .good { color: var(--good); }
     .bad { color: var(--bad); }
     @media (max-width: 980px) {
-      .hero, .dashboard, .metric-grid, .hero-points, .summary-grid, .profile-form {
+      .hero, .dashboard, .metric-grid, .hero-points, .summary-grid, .profile-form, .chart-panel {
         grid-template-columns: 1fr;
       }
     }
@@ -365,6 +419,10 @@
                 <div class="value" id="fixed-expenses-value">${{ '%.2f'|format(profile.monthly_summary.fixed_expenses if profile.monthly_summary else 0) }}</div>
               </div>
               <div class="metric">
+                <div class="label">Available before fixed expenses</div>
+                <div class="value" id="available-before-fixed">${{ '%.2f'|format(profile.monthly_summary.available_before_fixed if profile.monthly_summary else 0) }}</div>
+              </div>
+              <div class="metric">
                 <div class="label">Left this month</div>
                 <div class="value" id="leftover-money">${{ '%.2f'|format(profile.monthly_summary.leftover_money if profile.monthly_summary else 0) }}</div>
               </div>
@@ -372,6 +430,36 @@
             <p class="muted" id="summary-text" style="margin-top:12px;">
               {{ profile.monthly_summary.summary_text if profile.monthly_summary else 'Set your monthly income and fixed expenses to calculate real remaining room.' }}
             </p>
+          </div>
+
+          <div class="panel">
+            <h2>Category breakdown</h2>
+            <div class="chart-panel">
+              <div class="chart-wrap">
+                <svg id="category-donut-chart" viewBox="0 0 220 220" role="img" aria-label="Spending category breakdown donut chart">
+                  <g id="category-donut-slices"></g>
+                  <circle class="chart-center" cx="110" cy="110" r="54"></circle>
+                  <text class="chart-total" x="110" y="102">Tracked spend</text>
+                  <text class="chart-total-amount" id="category-donut-total" x="110" y="126">${{ '%.2f'|format(profile.total_spent or 0) }}</text>
+                </svg>
+              </div>
+              <ul class="legend" id="category-breakdown-legend">
+                {% if profile.category_breakdown %}
+                  {% for item in profile.category_breakdown %}
+                    <li class="legend-item">
+                      <span class="legend-swatch"></span>
+                      <div>
+                        <strong>{{ item.category }}</strong>
+                        <div class="small muted">{{ '%.2f'|format(item.percentage) }}% of tracked spend</div>
+                      </div>
+                      <strong>${{ '%.2f'|format(item.amount) }}</strong>
+                    </li>
+                  {% endfor %}
+                {% else %}
+                  <li class="empty">Upload a statement to see how your spending splits by category.</li>
+                {% endif %}
+              </ul>
+            </div>
           </div>
 
           <div class="panel">
@@ -469,7 +557,7 @@
           </div>
 
           <div class="panel">
-            <h2>Accountability Chat</h2>
+            <h2>AI Chatbot</h2>
             <p class="muted">Examples: “I ate at Howoo for $50” or “Cancel Netflix.”</p>
             <ul class="list messages" id="messages-list">
               {% if profile.messages %}
@@ -510,6 +598,7 @@
         document.getElementById("decision-count").textContent = (profile.subscription_decisions || []).length;
         document.getElementById("monthly-income-value").textContent = money((profile.monthly_summary || {}).income);
         document.getElementById("fixed-expenses-value").textContent = money((profile.monthly_summary || {}).fixed_expenses);
+        document.getElementById("available-before-fixed").textContent = money((profile.monthly_summary || {}).available_before_fixed);
         document.getElementById("leftover-money").textContent = money((profile.monthly_summary || {}).leftover_money);
         document.getElementById("summary-text").textContent = (profile.monthly_summary || {}).summary_text || "Set your monthly income and fixed expenses to calculate real remaining room.";
 
@@ -521,8 +610,58 @@
         renderTransactions(profile.recent_transactions || []);
         renderSubscriptions(profile.subscriptions || []);
         renderDecisions(profile.subscription_decisions || []);
+        renderCategoryBreakdown(profile.category_breakdown || [], profile.total_spent || 0);
         renderAgentNotes(profile.agent_notes || []);
         renderMessages(profile.messages || []);
+      }
+
+      const DONUT_COLORS = ["#ab3b2f", "#d57a32", "#e1b24b", "#6c8a4f", "#3f6f73", "#845a9b", "#bf6d7f"];
+
+      function polarToCartesian(cx, cy, radius, angleInDegrees) {
+        const angleInRadians = (angleInDegrees - 90) * Math.PI / 180.0;
+        return {
+          x: cx + (radius * Math.cos(angleInRadians)),
+          y: cy + (radius * Math.sin(angleInRadians)),
+        };
+      }
+
+      function describeArc(cx, cy, radius, startAngle, endAngle) {
+        const start = polarToCartesian(cx, cy, radius, endAngle);
+        const end = polarToCartesian(cx, cy, radius, startAngle);
+        const largeArcFlag = endAngle - startAngle <= 180 ? "0" : "1";
+        return `M ${start.x} ${start.y} A ${radius} ${radius} 0 ${largeArcFlag} 0 ${end.x} ${end.y}`;
+      }
+
+      function renderCategoryBreakdown(breakdown, totalSpent) {
+        const slices = document.getElementById("category-donut-slices");
+        const legend = document.getElementById("category-breakdown-legend");
+        document.getElementById("category-donut-total").textContent = money(totalSpent || 0);
+
+        if (!breakdown.length) {
+          slices.innerHTML = "";
+          legend.innerHTML = '<li class="empty">Upload a statement to see how your spending splits by category.</li>';
+          return;
+        }
+
+        let startAngle = 0;
+        slices.innerHTML = breakdown.map((item, index) => {
+          const sweep = Math.max((item.percentage / 100) * 360, 0.6);
+          const path = describeArc(110, 110, 78, startAngle, startAngle + sweep);
+          const color = DONUT_COLORS[index % DONUT_COLORS.length];
+          startAngle += sweep;
+          return `<path d="${path}" stroke="${color}" stroke-width="44" fill="none" stroke-linecap="butt"></path>`;
+        }).join("");
+
+        legend.innerHTML = breakdown.map((item, index) => `
+          <li class="legend-item">
+            <span class="legend-swatch" style="background:${DONUT_COLORS[index % DONUT_COLORS.length]};"></span>
+            <div>
+              <strong>${item.category}</strong>
+              <div class="small muted">${item.percentage.toFixed(2)}% of tracked spend</div>
+            </div>
+            <strong>${money(item.amount)}</strong>
+          </li>
+        `).join("");
       }
 
       function renderTransactions(transactions) {
@@ -661,7 +800,7 @@
         event.preventDefault();
         const input = document.getElementById("chat-input");
         const status = document.getElementById("chat-status");
-        status.textContent = "Coach is responding...";
+        status.textContent = "AI Chatbot is responding...";
 
         const response = await fetch("/api/chat", {
           method: "POST",

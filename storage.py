@@ -269,6 +269,20 @@ class Storage:
                 (user_id, note_type, content),
             )
 
+    def replace_agent_note(self, user_id: int, note_type: str, content: str) -> None:
+        with self._connect() as conn:
+            conn.execute(
+                "DELETE FROM agent_notes WHERE user_id = ? AND note_type = ?",
+                (user_id, note_type),
+            )
+            conn.execute(
+                """
+                INSERT INTO agent_notes (user_id, note_type, content)
+                VALUES (?, ?, ?)
+                """,
+                (user_id, note_type, content),
+            )
+
     def save_monthly_summary(
         self,
         user_id: int,
@@ -345,6 +359,7 @@ class Storage:
                 SELECT note_type, content, created_at
                 FROM agent_notes
                 WHERE user_id = ?
+                  AND note_type != 'monthly_focus'
                 ORDER BY id DESC
                 """,
                 (user_id,),
@@ -372,6 +387,7 @@ class Storage:
             "fixed_expenses": round(float(row["fixed_expenses"]), 2),
             "tracked_spending": round(float(row["tracked_spending"]), 2),
             "recurring_monthly_total": round(float(row["recurring_monthly_total"]), 2),
+            "available_before_fixed": round(float(row["income"]) - float(row["tracked_spending"]), 2),
             "leftover_money": round(float(row["leftover_money"]), 2),
             "discretionary_remaining": round(float(row["discretionary_remaining"]), 2),
             "summary_text": row["summary_text"],
@@ -401,13 +417,16 @@ class Storage:
             for row in transaction_rows
         ]
         category_totals = self._category_totals(transactions)
+        total_spent = round(sum(item["amount"] for item in transactions), 2)
+        category_breakdown = self._category_breakdown(category_totals, total_spent)
         recurring_expenses = self._recurring_expenses(transactions)
         monthly_recurring_total = round(sum(item["monthly_equivalent"] for item in recurring_expenses), 2)
 
         return {
             "transaction_count": len(transactions),
-            "total_spent": round(sum(item["amount"] for item in transactions), 2),
+            "total_spent": total_spent,
             "category_totals": category_totals,
+            "category_breakdown": category_breakdown,
             "recent_transactions": transactions[:12],
             "transactions": transactions,
             "subscriptions": recurring_expenses,
@@ -432,6 +451,22 @@ class Storage:
                 reverse=True,
             )
         )
+
+    @staticmethod
+    def _category_breakdown(category_totals: dict[str, float], total_spent: float) -> list[dict[str, float | str]]:
+        if total_spent <= 0:
+            return []
+
+        breakdown = []
+        for category, amount in category_totals.items():
+            breakdown.append(
+                {
+                    "category": category,
+                    "amount": round(amount, 2),
+                    "percentage": round((amount / total_spent) * 100, 2),
+                }
+            )
+        return breakdown
 
     @staticmethod
     def _recurring_expenses(transactions: list[dict[str, Any]]) -> list[dict[str, Any]]:
