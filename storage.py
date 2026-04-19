@@ -134,6 +134,30 @@ class Storage:
             return None
         return {"id": int(row["id"]), "email": row["email"]}
 
+    @staticmethod
+    def _month_key_from_date(date_value: str) -> str:
+        return str(date_value)[:7]
+
+    @staticmethod
+    def _month_label(month_key: str) -> str:
+        year, month = month_key.split("-")
+        month_names = [
+            "",
+            "January",
+            "February",
+            "March",
+            "April",
+            "May",
+            "June",
+            "July",
+            "August",
+            "September",
+            "October",
+            "November",
+            "December",
+        ]
+        return f"{month_names[int(month)]} {year}"
+
     def add_transactions(self, user_id: int, transactions: list[dict[str, Any]]) -> None:
         if not transactions:
             return
@@ -352,7 +376,7 @@ class Storage:
             "updated_at": row["updated_at"],
         }
 
-    def list_agent_notes(self, user_id: int) -> list[dict[str, Any]]:
+    def list_agent_notes(self, user_id: int, month_key: str | None = None) -> list[dict[str, Any]]:
         with self._connect() as conn:
             rows = conn.execute(
                 """
@@ -364,25 +388,46 @@ class Storage:
                 """,
                 (user_id,),
             ).fetchall()
-        return [dict(row) for row in rows]
+        notes = [dict(row) for row in rows]
+        if not month_key:
+            return notes
 
-    def get_latest_monthly_summary(self, user_id: int) -> dict[str, Any] | None:
+        focus_note_type = f"{self._month_label(month_key)} focus"
+        focused = [note for note in notes if note["note_type"] == focus_note_type]
+        others = [note for note in notes if note["note_type"] != focus_note_type and " focus" not in note["note_type"]]
+        return [*focused, *others]
+
+    def get_monthly_summary(self, user_id: int, month_key: str | None = None) -> dict[str, Any] | None:
         with self._connect() as conn:
-            row = conn.execute(
-                """
-                SELECT month_key, income, fixed_expenses, tracked_spending, recurring_monthly_total,
-                       leftover_money, discretionary_remaining, summary_text, created_at
-                FROM monthly_summaries
-                WHERE user_id = ?
-                ORDER BY month_key DESC, id DESC
-                LIMIT 1
-                """,
-                (user_id,),
-            ).fetchone()
+            if month_key:
+                row = conn.execute(
+                    """
+                    SELECT month_key, income, fixed_expenses, tracked_spending, recurring_monthly_total,
+                           leftover_money, discretionary_remaining, summary_text, created_at
+                    FROM monthly_summaries
+                    WHERE user_id = ? AND month_key = ?
+                    ORDER BY id DESC
+                    LIMIT 1
+                    """,
+                    (user_id, month_key),
+                ).fetchone()
+            else:
+                row = conn.execute(
+                    """
+                    SELECT month_key, income, fixed_expenses, tracked_spending, recurring_monthly_total,
+                           leftover_money, discretionary_remaining, summary_text, created_at
+                    FROM monthly_summaries
+                    WHERE user_id = ?
+                    ORDER BY month_key DESC, id DESC
+                    LIMIT 1
+                    """,
+                    (user_id,),
+                ).fetchone()
         if not row:
             return None
         return {
             "month_key": row["month_key"],
+            "month_label": self._month_label(row["month_key"]),
             "income": round(float(row["income"]), 2),
             "fixed_expenses": round(float(row["fixed_expenses"]), 2),
             "tracked_spending": round(float(row["tracked_spending"]), 2),
@@ -394,7 +439,7 @@ class Storage:
             "created_at": row["created_at"],
         }
 
-    def get_dashboard_data(self, user_id: int) -> dict[str, Any]:
+    def get_dashboard_data(self, user_id: int, month_key: str | None = None) -> dict[str, Any]:
         with self._connect() as conn:
             transaction_rows = conn.execute(
                 """
@@ -416,27 +461,42 @@ class Storage:
             }
             for row in transaction_rows
         ]
-        category_totals = self._category_totals(transactions)
-        total_spent = round(sum(item["amount"] for item in transactions), 2)
+        available_months = sorted({self._month_key_from_date(item["date"]) for item in transactions}, reverse=True)
+        selected_month = month_key if month_key in available_months else (available_months[0] if available_months else None)
+        selected_transactions = [
+            transaction
+            for transaction in transactions
+            if selected_month is None or self._month_key_from_date(transaction["date"]) == selected_month
+        ]
+
+        category_totals = self._category_totals(selected_transactions)
+        total_spent = round(sum(item["amount"] for item in selected_transactions), 2)
         category_breakdown = self._category_breakdown(category_totals, total_spent)
         recurring_expenses = self._recurring_expenses(transactions)
         monthly_recurring_total = round(sum(item["monthly_equivalent"] for item in recurring_expenses), 2)
 
         return {
-            "transaction_count": len(transactions),
+            "transaction_count": len(selected_transactions),
             "total_spent": total_spent,
             "category_totals": category_totals,
             "category_breakdown": category_breakdown,
-            "recent_transactions": transactions[:12],
-            "transactions": transactions,
+            "recent_transactions": selected_transactions[:12],
+            "transactions": selected_transactions,
+            "all_transactions": transactions,
+            "available_months": [
+                {"key": key, "label": self._month_label(key)}
+                for key in available_months
+            ],
+            "selected_month": selected_month,
+            "selected_month_label": self._month_label(selected_month) if selected_month else None,
             "subscriptions": recurring_expenses,
             "monthly_recurring_total": monthly_recurring_total,
             "messages": self.list_chat_messages(user_id),
             "subscription_decisions": self.list_subscription_decisions(user_id),
             "pending_action": self.get_pending_action(user_id),
             "financial_profile": self.get_financial_profile(user_id),
-            "agent_notes": self.list_agent_notes(user_id),
-            "monthly_summary": self.get_latest_monthly_summary(user_id),
+            "agent_notes": self.list_agent_notes(user_id, selected_month),
+            "monthly_summary": self.get_monthly_summary(user_id, selected_month),
         }
 
     @staticmethod
@@ -457,13 +517,23 @@ class Storage:
         if total_spent <= 0:
             return []
 
+        ordered = list(category_totals.items())
         breakdown = []
-        for category, amount in category_totals.items():
+        for index, (category, amount) in enumerate(ordered):
+            percentage = round((amount / total_spent) * 100, 2)
+            if index == 0:
+                shoutout = "This is your biggest leak this month."
+            elif percentage >= 20:
+                shoutout = "This is still taking a noticeable bite this month."
+            else:
+                shoutout = "This is a smaller category, not the main problem."
             breakdown.append(
                 {
                     "category": category,
                     "amount": round(amount, 2),
-                    "percentage": round((amount / total_spent) * 100, 2),
+                    "percentage": percentage,
+                    "shoutout": shoutout,
+                    "tooltip": f"{category}: ${amount:.2f} ({percentage:.2f}%). {shoutout}",
                 }
             )
         return breakdown

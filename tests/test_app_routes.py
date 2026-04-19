@@ -15,6 +15,13 @@ SAMPLE_CSV = """Transaction Date,Description,Category,Amount
 01/05/2026,Payment,Credit Card Payment,125.00
 """
 
+MULTI_MONTH_CSV = """Transaction Date,Description,Category,Amount
+03/03/2026,Coffee Shop,Food & Drink,-20.00
+03/08/2026,Grocer,Groceries,-80.00
+04/03/2026,NETFLIX.COM,Subscriptions,-15.49
+04/06/2026,Restaurant Row,Dining,-120.00
+"""
+
 
 class AppRouteTests(unittest.TestCase):
     def setUp(self):
@@ -226,6 +233,79 @@ class AppRouteTests(unittest.TestCase):
         self.assertIn("Dining", assistant_message)
         self.assertIn("Netflix", assistant_message)
 
+    def test_dashboard_defaults_to_newest_transaction_month_and_can_switch_months(self):
+        self.client.post("/signup", data={"email": "demo@example.com", "password": "secret123"})
+        self.client.post(
+            "/api/profile",
+            json={
+                "monthly_income": 3000,
+                "fixed_expenses": 1000,
+                "budgeting_goal": "Cut restaurant spending",
+            },
+        )
+        self.client.post(
+            "/api/upload-statement",
+            data={"statement": (io.BytesIO(MULTI_MONTH_CSV.encode("utf-8")), "statement.csv")},
+            content_type="multipart/form-data",
+        )
+
+        april_response = self.client.get("/")
+        march_response = self.client.get("/?month=2026-03")
+
+        self.assertEqual(april_response.status_code, 200)
+        self.assertIn(b'<option value="2026-04" selected>', april_response.data)
+        self.assertIn(b"April 2026 focus", april_response.data)
+        self.assertIn(b"$1864.51", april_response.data)
+
+        self.assertEqual(march_response.status_code, 200)
+        self.assertIn(b'<option value="2026-03" selected>', march_response.data)
+        self.assertIn(b"March 2026 focus", march_response.data)
+        self.assertIn(b"$1900.00", march_response.data)
+
+    def test_ai_chatbot_can_handle_subscription_cut_request_for_detected_recurring_charge(self):
+        self.client.post("/signup", data={"email": "demo@example.com", "password": "secret123"})
+        self.client.post(
+            "/api/profile",
+            json={
+                "monthly_income": 3000,
+                "fixed_expenses": 1000,
+                "budgeting_goal": "Trim subscriptions",
+            },
+        )
+        pilates_csv = """Transaction Date,Description,Category,Amount
+02/01/2026,PILATES CLUB,Wellness,-85.00
+03/01/2026,PILATES CLUB,Wellness,-85.00
+04/01/2026,PILATES CLUB,Wellness,-85.00
+"""
+        self.client.post(
+            "/api/upload-statement",
+            data={"statement": (io.BytesIO(pilates_csv.encode("utf-8")), "statement.csv")},
+            content_type="multipart/form-data",
+        )
+
+        response = self.client.post("/api/chat", json={"message": "I want to cut pilates"})
+        payload = response.get_json()
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("Pilates", payload["reply"])
+        self.assertIn("cancel", payload["reply"].lower())
+        self.assertIn(
+            "PILATES CLUB",
+            [decision["merchant"] for decision in payload["profile"]["subscription_decisions"]],
+        )
+
+    def test_ai_chatbot_can_add_generic_spend_without_merchant_name(self):
+        self.client.post("/signup", data={"email": "demo@example.com", "password": "secret123"})
+
+        response = self.client.post("/api/chat", json={"message": "I spent $40"})
+        payload = response.get_json()
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(payload["action"]["type"], "add_transaction")
+        self.assertEqual(payload["profile"]["transaction_count"], 1)
+        self.assertEqual(payload["profile"]["recent_transactions"][0]["description"], "Manual expense")
+        self.assertEqual(payload["profile"]["recent_transactions"][0]["amount"], 40.0)
+
     def test_logged_in_dashboard_shows_income_and_leftover_money_sections(self):
         self.client.post(
             "/signup",
@@ -242,6 +322,8 @@ class AppRouteTests(unittest.TestCase):
         self.assertIn(b"Agent notes", response.data)
         self.assertIn(b"Category breakdown", response.data)
         self.assertIn(b"category-donut-chart", response.data)
+        self.assertIn(b"month-selector", response.data)
+        self.assertIn(b"data-tooltip=", response.data)
 
     def test_analyze_rejects_blank_filename(self):
         response = self.client.post(

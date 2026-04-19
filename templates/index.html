@@ -156,6 +156,17 @@
       flex-wrap: wrap;
     }
     .topbar form { margin: 0; }
+    .month-switcher {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      flex-wrap: wrap;
+    }
+    .month-switcher select {
+      min-width: 180px;
+      width: auto;
+      background: #fff;
+    }
     .metric-grid {
       display: grid;
       grid-template-columns: repeat(4, 1fr);
@@ -339,17 +350,28 @@
         <div>
           <div class="eyebrow">Personal Finance AI Assistant</div>
           <h1 style="font-size:2.5rem; max-width:none; margin-bottom:6px;">Your spending history now has memory.</h1>
-          <p class="subhead" style="margin-bottom:0;">Signed in as {{ user.email }}. Upload fresh data, then use the accountability chat to add missing spend or mark subscriptions you are keeping versus cutting.</p>
+          <p class="subhead" style="margin-bottom:0;">Signed in as {{ user.email }}. Upload fresh data, then use the AI Chatbot to add missing spend or mark subscriptions you are keeping versus cutting.</p>
         </div>
-        <form method="post" action="/logout">
-          <button class="secondary" type="submit">Log out</button>
-        </form>
+        <div class="month-switcher">
+          <div>
+            <label for="month-selector">Selected month</label>
+            <select id="month-selector" aria-label="Selected month">
+              {% for month in profile.available_months %}
+                <option value="{{ month.key }}" {% if month.key == profile.selected_month %}selected{% endif %}>{{ month.label }}</option>
+              {% endfor %}
+            </select>
+          </div>
+          <form method="post" action="/logout">
+            <button class="secondary" type="submit">Log out</button>
+          </form>
+        </div>
       </div>
 
       <section class="dashboard">
         <div class="stack">
           <div class="panel">
             <h2>Personal Finance AI Assistant</h2>
+            <p class="muted" id="selected-month-label" style="margin-bottom:12px;">Viewing {{ profile.selected_month_label or 'No month selected' }}</p>
             <div class="metric-grid">
               <div class="metric">
                 <div class="label">Total spent tracked</div>
@@ -408,7 +430,7 @@
           </div>
 
           <div class="panel">
-            <h2>Left this month</h2>
+            <h2 id="leftover-heading">Left in {{ profile.selected_month_label or 'this month' }}</h2>
             <div class="summary-grid">
               <div class="metric">
                 <div class="label">Monthly income</div>
@@ -446,11 +468,12 @@
               <ul class="legend" id="category-breakdown-legend">
                 {% if profile.category_breakdown %}
                   {% for item in profile.category_breakdown %}
-                    <li class="legend-item">
+                    <li class="legend-item" data-tooltip="{{ item.tooltip }}" title="{{ item.tooltip }}">
                       <span class="legend-swatch"></span>
                       <div>
                         <strong>{{ item.category }}</strong>
                         <div class="small muted">{{ '%.2f'|format(item.percentage) }}% of tracked spend</div>
+                        <div class="small muted">{{ item.shoutout }}</div>
                       </div>
                       <strong>${{ '%.2f'|format(item.amount) }}</strong>
                     </li>
@@ -476,7 +499,7 @@
           </div>
 
           <div class="panel">
-            <h2>Recent transactions</h2>
+            <h2 id="transactions-heading">Recent transactions for {{ profile.selected_month_label or 'selected month' }}</h2>
             <ul class="list transactions" id="transactions-list">
               {% if profile.recent_transactions %}
                 {% for transaction in profile.recent_transactions %}
@@ -558,7 +581,7 @@
 
           <div class="panel">
             <h2>AI Chatbot</h2>
-            <p class="muted">Examples: “I ate at Howoo for $50” or “Cancel Netflix.”</p>
+            <p class="muted">Examples: “I ate at Howoo for $50”, “I spent $40”, or “Cancel Pilates.”</p>
             <ul class="list messages" id="messages-list">
               {% if profile.messages %}
                 {% for message in profile.messages %}
@@ -592,6 +615,10 @@
       }
 
       function renderProfile(profile) {
+        const monthLabel = profile.selected_month_label || "this month";
+        document.getElementById("selected-month-label").textContent = `Viewing ${profile.selected_month_label || "No month selected"}`;
+        document.getElementById("leftover-heading").textContent = `Left in ${monthLabel}`;
+        document.getElementById("transactions-heading").textContent = `Recent transactions for ${profile.selected_month_label || "selected month"}`;
         document.getElementById("total-spent").textContent = money(profile.total_spent);
         document.getElementById("transaction-count").textContent = profile.transaction_count;
         document.getElementById("recurring-total").textContent = money(profile.monthly_recurring_total);
@@ -601,6 +628,7 @@
         document.getElementById("available-before-fixed").textContent = money((profile.monthly_summary || {}).available_before_fixed);
         document.getElementById("leftover-money").textContent = money((profile.monthly_summary || {}).leftover_money);
         document.getElementById("summary-text").textContent = (profile.monthly_summary || {}).summary_text || "Set your monthly income and fixed expenses to calculate real remaining room.";
+        renderMonthSelector(profile.available_months || [], profile.selected_month || "");
 
         const financialProfile = profile.financial_profile || {};
         document.getElementById("monthly-income").value = financialProfile.monthly_income ?? 0;
@@ -613,6 +641,13 @@
         renderCategoryBreakdown(profile.category_breakdown || [], profile.total_spent || 0);
         renderAgentNotes(profile.agent_notes || []);
         renderMessages(profile.messages || []);
+      }
+
+      function renderMonthSelector(months, selectedMonth) {
+        const selector = document.getElementById("month-selector");
+        selector.innerHTML = months.map((month) => `
+          <option value="${month.key}" ${month.key === selectedMonth ? "selected" : ""}>${month.label}</option>
+        `).join("");
       }
 
       const DONUT_COLORS = ["#ab3b2f", "#d57a32", "#e1b24b", "#6c8a4f", "#3f6f73", "#845a9b", "#bf6d7f"];
@@ -648,16 +683,18 @@
           const sweep = Math.max((item.percentage / 100) * 360, 0.6);
           const path = describeArc(110, 110, 78, startAngle, startAngle + sweep);
           const color = DONUT_COLORS[index % DONUT_COLORS.length];
+          const tooltip = String(item.tooltip || "").replaceAll('"', "&quot;");
           startAngle += sweep;
-          return `<path d="${path}" stroke="${color}" stroke-width="44" fill="none" stroke-linecap="butt"></path>`;
+          return `<path d="${path}" stroke="${color}" stroke-width="44" fill="none" stroke-linecap="butt" data-tooltip="${tooltip}"><title>${item.tooltip || ""}</title></path>`;
         }).join("");
 
         legend.innerHTML = breakdown.map((item, index) => `
-          <li class="legend-item">
+          <li class="legend-item" data-tooltip="${item.tooltip || ""}" title="${item.tooltip || ""}">
             <span class="legend-swatch" style="background:${DONUT_COLORS[index % DONUT_COLORS.length]};"></span>
             <div>
               <strong>${item.category}</strong>
               <div class="small muted">${item.percentage.toFixed(2)}% of tracked spend</div>
+              <div class="small muted">${item.shoutout || ""}</div>
             </div>
             <strong>${money(item.amount)}</strong>
           </li>
@@ -761,6 +798,7 @@
             monthly_income: Number(document.getElementById("monthly-income").value || 0),
             fixed_expenses: Number(document.getElementById("fixed-expenses").value || 0),
             budgeting_goal: document.getElementById("budgeting-goal").value.trim(),
+            month: document.getElementById("month-selector").value,
           }),
         });
         const payload = await response.json();
@@ -805,7 +843,7 @@
         const response = await fetch("/api/chat", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ message: input.value }),
+          body: JSON.stringify({ message: input.value, month: document.getElementById("month-selector").value }),
         });
         const payload = await response.json();
 
@@ -818,6 +856,12 @@
         status.textContent = payload.reply;
         input.value = "";
       });
+
+      document.getElementById("month-selector").addEventListener("change", (event) => {
+        window.location.assign(`/?month=${encodeURIComponent(event.currentTarget.value)}`);
+      });
+
+      renderProfile({{ profile|tojson }});
     </script>
   {% endif %}
 </body>

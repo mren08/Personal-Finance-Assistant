@@ -19,18 +19,39 @@ from storage import Storage
 
 class _FallbackAgentClient:
     def __call__(self, payload: dict) -> dict:
+        message = str(payload.get("message") or "").strip().lower()
         context = payload.get("context", {})
         monthly_summary = context.get("monthly_summary") or {}
         financial_profile = context.get("financial_profile") or {}
+        month_label = context.get("selected_month_label") or "this month"
+        category_breakdown = context.get("category_breakdown") or []
+        subscriptions = context.get("subscriptions") or []
+        notes = context.get("agent_notes") or []
         goal = str(financial_profile.get("budgeting_goal") or "").strip()
         available_before_fixed = monthly_summary.get("available_before_fixed")
         leftover_money = monthly_summary.get("leftover_money")
-        if isinstance(leftover_money, (int, float)):
-            reply = f"You have ${float(leftover_money):.2f} left this month after fixed expenses."
+
+        if notes and any(token in message for token in {"focus", "notes", "month"}):
+            reply = f"For {month_label}, the main focus is: {notes[0]['content']}"
+        elif subscriptions and any(token in message for token in {"subscription", "subscriptions", "recurring"}):
+            recurring_total = float(context.get("monthly_recurring_total") or 0)
+            names = ", ".join(_display_merchant(item["merchant"]) for item in subscriptions[:3])
+            reply = (
+                f"For {month_label}, I see recurring charges totaling ${recurring_total:.2f} per month, "
+                f"including {names}. Those are the first places I would challenge."
+            )
+        elif category_breakdown and any(token in message for token in {"category", "categories", "spending", "overspend"}):
+            biggest = category_breakdown[0]
+            reply = (
+                f"For {month_label}, your biggest category is {biggest['category']} at "
+                f"${biggest['amount']:.2f} ({biggest['percentage']:.2f}% of tracked spending)."
+            )
+        elif isinstance(leftover_money, (int, float)):
+            reply = f"You have ${float(leftover_money):.2f} left in {month_label} after fixed expenses."
             if goal:
-                reply = f"{reply} That only matters if you still act on: {goal}."
+                reply = f"{reply} Your stated goal is still: {goal}."
         elif isinstance(available_before_fixed, (int, float)):
-            reply = f"You have ${float(available_before_fixed):.2f} available before fixed expenses this month."
+            reply = f"You have ${float(available_before_fixed):.2f} available in {month_label} before fixed expenses."
         else:
             reply = FALLBACK_REPLY
         return {"reply": reply, "actions": []}
@@ -45,12 +66,11 @@ def build_agent_service() -> AgentService:
     return AgentService(llm_client=_FallbackAgentClient())
 
 
-def _current_month_key() -> str:
-    return datetime.now(UTC).strftime("%Y-%m")
-
-
-def _current_month_label() -> str:
-    return datetime.now(UTC).strftime("%B %Y")
+def _month_label(month_key: str | None) -> str:
+    if not month_key:
+        return datetime.now(UTC).strftime("%B %Y")
+    year, month = month_key.split("-")
+    return datetime(int(year), int(month), 1, tzinfo=UTC).strftime("%B %Y")
 
 
 def _display_merchant(name: str) -> str:
@@ -61,8 +81,9 @@ def _display_merchant(name: str) -> str:
 
 
 def _build_month_focus_note(profile: dict, summary: dict) -> str:
+    month_label = profile.get("selected_month_label") or _month_label(profile.get("selected_month"))
     segments = [
-        f"{_current_month_label()}: left after fixed expenses is ${summary['leftover_money']:.2f}."
+        f"{month_label}: left after fixed expenses is ${summary['leftover_money']:.2f}."
     ]
 
     category_breakdown = profile.get("category_breakdown") or []
@@ -91,13 +112,14 @@ def _build_proactive_chat_message(profile: dict) -> str | None:
     category_breakdown = profile.get("category_breakdown") or []
     subscriptions = profile.get("subscriptions") or []
     monthly_summary = profile.get("monthly_summary") or {}
+    month_label = profile.get("selected_month_label") or _month_label(profile.get("selected_month"))
     if not category_breakdown and not subscriptions and not monthly_summary:
         return None
 
     parts = []
     leftover_money = monthly_summary.get("leftover_money")
     if isinstance(leftover_money, (int, float)):
-        parts.append(f"You have ${float(leftover_money):.2f} left this month after fixed expenses.")
+        parts.append(f"For {month_label}, you have ${float(leftover_money):.2f} left after fixed expenses.")
 
     if category_breakdown:
         biggest = category_breakdown[0]
@@ -122,6 +144,25 @@ def _extract_monthly_focus_content(actions: list[dict]) -> str | None:
         if action.get("type") == "save_agent_note" and action.get("note_type") == "monthly_focus":
             return action.get("content")
     return None
+
+
+def _coerce_selected_month(storage: Storage, user_id: int, month_key: str | None = None) -> str | None:
+    profile = storage.get_dashboard_data(user_id, month_key)
+    return profile.get("selected_month")
+
+
+def _merge_selected_month_into_transaction(transaction: dict, selected_month: str | None) -> dict:
+    if not selected_month:
+        return transaction
+
+    date_value = str(transaction.get("date") or "")
+    if date_value.startswith(f"{selected_month}-"):
+        return transaction
+
+    day = min(datetime.now(UTC).day, 28)
+    updated = dict(transaction)
+    updated["date"] = f"{selected_month}-{day:02d}"
+    return updated
 
 def _parse_float(form, field: str, default: float = 0.0) -> float:
     raw = form.get(field, str(default)).strip()
@@ -278,19 +319,24 @@ def create_app() -> Flask:
 
     def maybe_seed_proactive_chat(user_id: int, profile: dict) -> None:
         storage = get_storage()
-        if storage.list_chat_messages(user_id):
+        if not profile.get("transaction_count"):
             return
 
-        if not profile.get("transaction_count"):
+        selected_month_label = profile.get("selected_month_label")
+        if selected_month_label:
+            existing = storage.list_chat_messages(user_id)
+            if any(selected_month_label in str(message.get("content") or "") for message in existing):
+                return
+        elif storage.list_chat_messages(user_id):
             return
 
         proactive_message = _build_proactive_chat_message(profile)
         if proactive_message:
             storage.add_chat_message(user_id, "assistant", proactive_message)
 
-    def refresh_user_summary(user_id: int) -> dict:
+    def refresh_user_summary(user_id: int, month_key: str | None = None) -> dict:
         storage = get_storage()
-        profile = storage.get_dashboard_data(user_id)
+        profile = storage.get_dashboard_data(user_id, month_key)
         financial_profile = profile.get("financial_profile") or {
             "monthly_income": 0,
             "fixed_expenses": 0,
@@ -304,7 +350,7 @@ def create_app() -> Flask:
         )
         storage.save_monthly_summary(
             user_id,
-            month_key=_current_month_key(),
+            month_key=profile.get("selected_month") or datetime.now(UTC).strftime("%Y-%m"),
             income=summary["monthly_income"],
             fixed_expenses=summary["fixed_expenses"],
             tracked_spending=summary["tracked_spending"],
@@ -312,23 +358,30 @@ def create_app() -> Flask:
             leftover_money=summary["leftover_money"],
             discretionary_remaining=summary["discretionary_remaining"],
             summary_text=(
-                f"Left this month after fixed expenses: ${summary['leftover_money']:.2f}. "
+                f"Left in {profile.get('selected_month_label') or 'this month'} after fixed expenses: ${summary['leftover_money']:.2f}. "
                 f"Available before fixed expenses: ${summary['available_before_fixed']:.2f}."
             ),
         )
-        return storage.get_dashboard_data(user_id)
+        return storage.get_dashboard_data(user_id, profile.get("selected_month"))
 
     def update_current_month_focus_note(user_id: int, profile: dict, content: str | None = None) -> dict:
         summary = profile.get("monthly_summary") or {}
         if not summary:
             return profile
 
+        selected_month = profile.get("selected_month")
+        note_type = (
+            f"{profile.get('selected_month_label') or _month_label(selected_month)} focus"
+            if selected_month
+            else f"{datetime.now(UTC).strftime('%B %Y')} focus"
+        )
+
         get_storage().replace_agent_note(
             user_id,
-            note_type=f"{_current_month_label()} focus",
+            note_type=note_type,
             content=content or _build_month_focus_note(profile, summary),
         )
-        return get_storage().get_dashboard_data(user_id)
+        return get_storage().get_dashboard_data(user_id, selected_month)
 
     def apply_agent_actions(user_id: int, actions: list[dict]) -> None:
         storage = get_storage()
@@ -379,7 +432,11 @@ def create_app() -> Flask:
                 )
             elif action_type == "add_transaction":
                 storage.clear_pending_action(user_id)
-                storage.add_transactions(user_id, [action["transaction"]])
+                selected_month = _coerce_selected_month(storage, user_id, session.get("selected_month"))
+                storage.add_transactions(
+                    user_id,
+                    [_merge_selected_month_into_transaction(action["transaction"], selected_month)],
+                )
 
     @app.route("/")
     def index():
@@ -389,12 +446,15 @@ def create_app() -> Flask:
         if user_id is not None:
             user = get_storage().get_user(user_id)
             if user:
-                profile = refresh_user_summary(user_id)
+                requested_month = request.args.get("month") or session.get("selected_month")
+                profile = refresh_user_summary(user_id, requested_month)
+                session["selected_month"] = profile.get("selected_month")
                 profile = update_current_month_focus_note(user_id, profile)
                 maybe_seed_proactive_chat(user_id, profile)
-                profile = get_storage().get_dashboard_data(user_id)
+                profile = get_storage().get_dashboard_data(user_id, session.get("selected_month"))
             else:
                 session.pop("user_id", None)
+                session.pop("selected_month", None)
 
         return render_template(
             "index.html",
@@ -417,6 +477,7 @@ def create_app() -> Flask:
         except ValueError as exc:
             return str(exc), 400
         session["user_id"] = user_id
+        session.pop("selected_month", None)
         return redirect(url_for("index"))
 
     @app.route("/login", methods=["POST"])
@@ -427,11 +488,13 @@ def create_app() -> Flask:
         if user_id is None:
             return "Invalid email or password.", 401
         session["user_id"] = user_id
+        session.pop("selected_month", None)
         return redirect(url_for("index"))
 
     @app.route("/logout", methods=["POST"])
     def logout():
         session.pop("user_id", None)
+        session.pop("selected_month", None)
         return redirect(url_for("index"))
 
     @app.route("/api/profile", methods=["POST"])
@@ -448,7 +511,9 @@ def create_app() -> Flask:
             fixed_expenses=float(payload.get("fixed_expenses", 0)),
             budgeting_goal=str(payload.get("budgeting_goal", "")).strip(),
         )
-        profile = refresh_user_summary(user_id)
+        requested_month = payload.get("month") or session.get("selected_month")
+        profile = refresh_user_summary(user_id, requested_month)
+        session["selected_month"] = profile.get("selected_month")
         profile = update_current_month_focus_note(user_id, profile)
         return jsonify({"profile": profile})
 
@@ -565,20 +630,22 @@ def create_app() -> Flask:
                     for item in transactions
                 ],
             )
-            profile = refresh_user_summary(user_id)
+            selected_month = _coerce_selected_month(get_storage(), user_id)
+            session["selected_month"] = selected_month
+            profile = refresh_user_summary(user_id, selected_month)
             agent_result = get_agent_service().run_chat_turn(
                 message="I uploaded a new statement. Update my coaching notes.",
                 agent_context=profile,
             )
             monthly_focus_content = _extract_monthly_focus_content(agent_result["actions"])
             apply_agent_actions(user_id, agent_result["actions"])
-            profile = refresh_user_summary(user_id)
+            profile = refresh_user_summary(user_id, session.get("selected_month"))
             profile = update_current_month_focus_note(user_id, profile, monthly_focus_content)
             maybe_seed_proactive_chat(user_id, profile)
             return jsonify(
                 {
                     "saved_transactions": len(transactions),
-                    "profile": get_storage().get_dashboard_data(user_id),
+                    "profile": get_storage().get_dashboard_data(user_id, session.get("selected_month")),
                 }
             )
         except ValueError as exc:
@@ -600,22 +667,24 @@ def create_app() -> Flask:
             return jsonify({"error": "Message is required."}), 400
 
         storage = get_storage()
-        profile = refresh_user_summary(user_id)
+        requested_month = payload.get("month") or session.get("selected_month")
+        profile = refresh_user_summary(user_id, requested_month)
+        session["selected_month"] = profile.get("selected_month")
         heuristic_result = get_coach().process_message(message, profile)
         action = heuristic_result["action"]
         if action["type"] != "none":
             apply_agent_actions(user_id, [action])
 
-        profile = refresh_user_summary(user_id)
+        profile = refresh_user_summary(user_id, session.get("selected_month"))
         agent_result = get_agent_service().run_chat_turn(message=message, agent_context=profile)
         monthly_focus_content = _extract_monthly_focus_content(agent_result["actions"])
         apply_agent_actions(user_id, agent_result["actions"])
 
-        reply = agent_result["reply"] or heuristic_result["reply"]
+        reply = heuristic_result["reply"] if action["type"] != "none" else (agent_result["reply"] or heuristic_result["reply"])
         storage.add_chat_message(user_id, "user", message)
         storage.add_chat_message(user_id, "assistant", reply)
 
-        updated_profile = refresh_user_summary(user_id)
+        updated_profile = refresh_user_summary(user_id, session.get("selected_month"))
         updated_profile = update_current_month_focus_note(user_id, updated_profile, monthly_focus_content)
         return jsonify(
             {

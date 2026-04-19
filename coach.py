@@ -36,13 +36,14 @@ class OverspendingCoach:
                     "action": {"type": "clear_pending_action"},
                 }
 
-        subscription_action = self._subscription_action(lower_message)
+        subscription_action = self._subscription_action(lower_message, profile)
         if subscription_action:
             merchant, decision = subscription_action
+            display_name = self._display_merchant(merchant)
             if decision == "keep":
-                reply = f"Keep {merchant} if you actually use it. Just stop pretending every subscription is essential."
+                reply = f"Keep {display_name} if you actually use it. Just stop pretending every subscription is essential."
             else:
-                reply = f"Cancel it: {merchant}. If you still pay for overlapping services after this, that is a choice, not an accident."
+                reply = f"Cancel it: {display_name}. If you still pay for overlapping services after this, that is a choice, not an accident."
             return {
                 "reply": reply,
                 "action": {
@@ -84,7 +85,7 @@ class OverspendingCoach:
             "action": {"type": "none"},
         }
 
-    def _subscription_action(self, lower_message: str) -> tuple[str, str] | None:
+    def _subscription_action(self, lower_message: str, profile: dict[str, Any]) -> tuple[str, str] | None:
         decision = None
         if "cancel" in lower_message or "cut" in lower_message:
             decision = "cancel"
@@ -96,6 +97,15 @@ class OverspendingCoach:
 
         for keyword, merchant in self.KNOWN_SUBSCRIPTIONS.items():
             if keyword in lower_message:
+                return merchant, decision
+
+        subscriptions = profile.get("subscriptions") or []
+        for subscription in subscriptions:
+            merchant = str(subscription.get("merchant") or "").strip()
+            if not merchant:
+                continue
+            merchant_tokens = self._normalized(merchant)
+            if merchant_tokens and merchant_tokens.intersection(self._normalized(lower_message)):
                 return merchant, decision
         return None
 
@@ -118,7 +128,12 @@ class OverspendingCoach:
             if for_match and not amount_match:
                 merchant = for_match.group(1).strip()
 
-        if not amount_match or not merchant:
+        if not amount_match:
+            return None
+
+        if merchant is None and re.search(r"\b(spent|paid|bought)\b", message, re.IGNORECASE):
+            merchant = "Manual expense"
+        if not merchant:
             return None
 
         merchant = merchant.rstrip(".")
@@ -138,6 +153,13 @@ class OverspendingCoach:
     def _normalized(text: str) -> set[str]:
         cleaned = re.sub(r"[^a-z0-9 ]+", " ", text.lower())
         return {token for token in cleaned.split() if len(token) > 1}
+
+    @staticmethod
+    def _display_merchant(merchant: str) -> str:
+        merchant = merchant.strip()
+        if merchant.isupper():
+            return merchant.title()
+        return merchant
 
     def _should_confirm_existing_match(
         self,
