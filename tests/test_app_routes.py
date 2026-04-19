@@ -22,6 +22,13 @@ MULTI_MONTH_CSV = """Transaction Date,Description,Category,Amount
 04/06/2026,Restaurant Row,Dining,-120.00
 """
 
+GAS_AND_MEMBERSHIP_CSV = """Transaction Date,Description,Category,Amount
+01/03/2026,BP#34122123010 OCEAN BP,Travel,-92.10
+02/03/2026,BP#34122123010 OCEAN BP,Travel,-107.20
+01/07/2026,CLR*ClubPilate7187010242,Wellness,-99.65
+02/07/2026,CLR*ClubPilate7187010242,Wellness,-99.65
+"""
+
 
 class AppRouteTests(unittest.TestCase):
     def setUp(self):
@@ -335,6 +342,36 @@ class AppRouteTests(unittest.TestCase):
         self.assertIn("Dining", payload["reply"])
         self.assertIn("Netflix", payload["reply"])
         self.assertIn("Spend less on dining", payload["reply"])
+
+    def test_ai_chatbot_answers_monthly_gas_average_from_uploaded_history(self):
+        self.client.post("/signup", data={"email": "demo@example.com", "password": "secret123"})
+        self.client.post(
+            "/api/upload-statement",
+            data={"statement": (io.BytesIO(GAS_AND_MEMBERSHIP_CSV.encode("utf-8")), "statement.csv")},
+            content_type="multipart/form-data",
+        )
+
+        response = self.client.post("/api/chat", json={"message": "how much do i spend on gas monthly"})
+        payload = response.get_json()
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("average monthly gas spend is $99.65", payload["reply"].lower())
+        self.assertNotIn("main focus", payload["reply"].lower())
+
+    def test_gas_station_repeat_charges_are_not_treated_as_recurring_subscriptions(self):
+        self.client.post("/signup", data={"email": "demo@example.com", "password": "secret123"})
+        response = self.client.post(
+            "/api/upload-statement",
+            data={"statement": (io.BytesIO(GAS_AND_MEMBERSHIP_CSV.encode("utf-8")), "statement.csv")},
+            content_type="multipart/form-data",
+        )
+
+        payload = response.get_json()
+
+        self.assertEqual(response.status_code, 200)
+        merchants = [item["merchant"] for item in payload["profile"]["subscriptions"]]
+        self.assertIn("CLR*ClubPilate7187010242", merchants)
+        self.assertNotIn("BP#34122123010 OCEAN BP", merchants)
 
     def test_logged_in_dashboard_shows_income_and_leftover_money_sections(self):
         self.client.post(

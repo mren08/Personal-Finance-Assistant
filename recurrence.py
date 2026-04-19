@@ -32,6 +32,23 @@ class RecurringExpense:
 
 
 class RecurringExpenseAnalyzer:
+    RECURRING_CATEGORY_KEYWORDS = {
+        "subscription",
+        "subscriptions",
+        "membership",
+        "memberships",
+        "bill",
+        "bills",
+        "utility",
+        "utilities",
+        "insurance",
+        "phone",
+        "internet",
+        "streaming",
+        "wellness",
+        "health",
+        "fitness",
+    }
     NOISE_TOKENS = {
         "tst",
         "sq",
@@ -68,6 +85,8 @@ class RecurringExpenseAnalyzer:
 
             frequency = self._infer_frequency(gaps)
             if frequency == "one-off":
+                continue
+            if not self._is_subscription_like(sorted_items[-1].category, merchant_labels[key]):
                 continue
 
             span_days = (dates[-1] - dates[0]).days
@@ -110,6 +129,17 @@ class RecurringExpenseAnalyzer:
     def _merchant_label(self, description: str) -> str:
         label = re.sub(r"\s+", " ", description).strip()
         return label[:48]
+
+    def _is_subscription_like(self, category: str, merchant_label: str) -> bool:
+        normalized_category = str(category).strip().lower()
+        if any(keyword in normalized_category for keyword in self.RECURRING_CATEGORY_KEYWORDS):
+            return True
+
+        normalized_merchant = merchant_label.lower()
+        return any(
+            keyword in normalized_merchant
+            for keyword in {"netflix", "spotify", "hulu", "disney", "pilates", "gym", "club pilates"}
+        )
 
     def _infer_frequency(self, gaps: List[int]) -> str:
         typical_gap = median(gaps)

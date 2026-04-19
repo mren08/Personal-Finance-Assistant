@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import tempfile
 from collections import defaultdict
 from datetime import UTC, datetime
@@ -35,8 +36,11 @@ class _FallbackAgentClient:
         biggest = category_breakdown[0] if category_breakdown else None
         strongest_subscription = subscriptions[0] if subscriptions else None
         note_content = str(notes[0]["content"]).strip() if notes else ""
+        topic_reply = _category_topic_reply(message, context)
 
-        if any(token in message for token in {"help", "advice", "suggest", "should i", "what should", "how do i", "plan"}):
+        if topic_reply:
+            reply = topic_reply
+        elif any(token in message for token in {"help", "advice", "suggest", "should i", "what should", "how do i", "plan"}):
             reply = self._advice_reply(
                 month_label=month_label,
                 leftover_money=leftover_money,
@@ -143,6 +147,58 @@ def _display_merchant(name: str) -> str:
     if cleaned.isupper():
         return cleaned.title()
     return cleaned
+
+
+def _category_topic_reply(message: str, context: dict) -> str | None:
+    lowered = str(message).lower()
+    if not any(token in lowered for token in {"how much", "average", "avg"}) or not any(
+        token in lowered for token in {"month", "monthly", "per month"}
+    ):
+        return None
+
+    all_transactions = context.get("all_transactions") or context.get("transactions") or []
+    if not all_transactions:
+        return None
+
+    overall_months = sorted({str(item.get("date", ""))[:7] for item in all_transactions if item.get("date")})
+    if not overall_months:
+        return None
+
+    topic_aliases = {
+        "gas": {"gas", "fuel", "bp", "shell", "exxon", "mobil", "chevron", "sunoco", "texaco"},
+        "dining": {"dining", "restaurant", "restaurants", "food"},
+        "groceries": {"groceries", "grocery", "supermarket"},
+        "subscriptions": {"subscription", "subscriptions", "streaming", "membership"},
+    }
+    chosen_topic = next((topic for topic, aliases in topic_aliases.items() if any(alias in lowered for alias in aliases)), None)
+    if not chosen_topic:
+        return None
+
+    def tokens(text: str) -> set[str]:
+        return {token for token in re.split(r"[^a-z0-9]+", text.lower()) if token}
+
+    def matches_topic(transaction: dict) -> bool:
+        category = str(transaction.get("category") or "").lower()
+        description = str(transaction.get("description") or "").lower()
+        category_tokens = tokens(category)
+        description_tokens = tokens(description)
+        if chosen_topic == "gas":
+            return bool(description_tokens.intersection(topic_aliases["gas"])) or bool(
+                category_tokens.intersection({"gas", "fuel", "travel", "transport"})
+            )
+        return bool(category_tokens.intersection(topic_aliases[chosen_topic])) or bool(
+            description_tokens.intersection(topic_aliases[chosen_topic])
+        )
+
+    matched = [transaction for transaction in all_transactions if matches_topic(transaction)]
+    if not matched:
+        return None
+
+    total = round(sum(float(item.get("amount") or 0) for item in matched), 2)
+    average = round(total / len(overall_months), 2)
+    month_phrase = f"across {len(overall_months)} uploaded months"
+    topic_label = chosen_topic.title()
+    return f"Your average monthly {chosen_topic} spend is ${average:.2f} {month_phrase}, with ${total:.2f} total tracked in {topic_label}."
 
 
 def _build_month_focus_note(profile: dict, summary: dict) -> str:
