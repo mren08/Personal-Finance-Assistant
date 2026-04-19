@@ -3,6 +3,7 @@ import os
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 import app as app_module
 
@@ -133,6 +134,73 @@ class AppRouteTests(unittest.TestCase):
         self.assertEqual(payload["action"]["type"], "confirm_transaction_match")
         self.assertEqual(payload["profile"]["transaction_count"], 1)
 
+    def test_profile_update_route_saves_income_and_fixed_expenses(self):
+        self.client.post("/signup", data={"email": "demo@example.com", "password": "secret123"})
+
+        response = self.client.post(
+            "/api/profile",
+            json={
+                "monthly_income": 4200,
+                "fixed_expenses": 1800,
+                "budgeting_goal": "Spend less on dining",
+            },
+        )
+
+        payload = response.get_json()
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(payload["profile"]["financial_profile"]["monthly_income"], 4200)
+        self.assertEqual(payload["profile"]["financial_profile"]["fixed_expenses"], 1800)
+        self.assertEqual(payload["profile"]["monthly_summary"]["leftover_money"], 4200)
+        self.assertEqual(payload["profile"]["monthly_summary"]["discretionary_remaining"], 2400)
+
+    def test_chat_route_persists_agent_note_from_llm_result(self):
+        self.client.post("/signup", data={"email": "demo@example.com", "password": "secret123"})
+        self.client.post(
+            "/api/profile",
+            json={
+                "monthly_income": 4200,
+                "fixed_expenses": 1800,
+                "budgeting_goal": "Spend less on dining",
+            },
+        )
+
+        with patch("app.build_agent_service") as build_agent_service:
+            build_agent_service.return_value.run_chat_turn.return_value = {
+                "reply": "You have $2400 left this month.",
+                "actions": [
+                    {
+                        "type": "save_agent_note",
+                        "note_type": "monthly_focus",
+                        "content": "Dining should stay under control if the user wants buffer.",
+                    }
+                ],
+            }
+
+            response = self.client.post(
+                "/api/chat",
+                json={"message": "How much do I have left this month?"},
+            )
+
+        payload = response.get_json()
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(payload["reply"], "You have $2400 left this month.")
+        self.assertEqual(payload["profile"]["agent_notes"][0]["note_type"], "monthly_focus")
+
+    def test_logged_in_dashboard_shows_income_and_leftover_money_sections(self):
+        self.client.post(
+            "/signup",
+            data={"email": "demo@example.com", "password": "secret123"},
+            follow_redirects=True,
+        )
+
+        response = self.client.get("/")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(b"Monthly income", response.data)
+        self.assertIn(b"Fixed expenses", response.data)
+        self.assertIn(b"Left this month", response.data)
+        self.assertIn(b"Agent notes", response.data)
+
     def test_analyze_rejects_blank_filename(self):
         response = self.client.post(
             "/api/analyze",
@@ -165,6 +233,14 @@ class AppRouteTests(unittest.TestCase):
         self.assertIn("New > Web Service", readme)
         self.assertIn("New > Blueprint", readme)
         self.assertIn("not production-safe for sensitive financial data", readme)
+
+    def test_readme_mentions_openai_key_and_profile_inputs(self):
+        readme = Path("README.md").read_text(encoding="utf-8")
+
+        self.assertIn("OPENAI_API_KEY", readme)
+        self.assertIn("monthly income", readme.lower())
+        self.assertIn("fixed expenses", readme.lower())
+        self.assertIn("agent notes", readme.lower())
 
 
 if __name__ == "__main__":
