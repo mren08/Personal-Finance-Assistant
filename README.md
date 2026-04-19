@@ -23,6 +23,27 @@ Then open `http://localhost:5055`.
 
 On first run, the app creates a local SQLite database file named `budget_app.db` unless you override it with `APP_DB_PATH`.
 
+## Backend Agent Setup
+
+The backend agent can use the OpenAI Responses API for coaching and structured actions.
+
+Set:
+
+```bash
+export OPENAI_API_KEY=your-key-here
+```
+
+If `OPENAI_API_KEY` is not set, the app falls back to deterministic coaching so the dashboard and tests still work locally.
+
+The logged-in dashboard now supports:
+
+- monthly income
+- fixed expenses
+- budgeting goal
+- leftover-money summaries
+- agent notes
+- persistent chat tied to saved account data
+
 ## Product Direction
 
 This version is built as an overspending coach rather than a generic budgeting dashboard. The main product loop is:
@@ -33,6 +54,7 @@ This version is built as an overspending coach rather than a generic budgeting d
 4. Use persistent chat to add missing transactions or mark subscriptions to keep/cancel
 
 The chat is intentionally blunt. It is meant to act like an accountability partner, not a neutral assistant.
+The monthly plan form lets users save monthly income and fixed expenses so the app can compute what is actually left this month.
 
 ## Deploy on Render
 

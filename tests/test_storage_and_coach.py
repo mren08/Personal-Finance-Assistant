@@ -1,5 +1,6 @@
 import tempfile
 import unittest
+import sqlite3
 
 from coach import OverspendingCoach
 from storage import Storage
@@ -28,6 +29,114 @@ class StorageTests(unittest.TestCase):
 
             self.assertEqual(profile["transaction_count"], 1)
             self.assertEqual(profile["category_totals"]["Subscriptions"], 15.49)
+
+    def test_storage_persists_profile_notes_and_monthly_summary(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            storage = Storage(f"{tmpdir}/app.db")
+            user_id = storage.create_user("michelle@example.com", "secret123")
+
+            storage.upsert_financial_profile(
+                user_id,
+                monthly_income=4200,
+                fixed_expenses=1800,
+                budgeting_goal="Cut dining spend",
+            )
+            storage.save_agent_note(
+                user_id,
+                note_type="behavior_pattern",
+                content="Dining usually spikes on weekends.",
+            )
+            storage.save_monthly_summary(
+                user_id,
+                month_key="2026-04",
+                income=4200,
+                fixed_expenses=1800,
+                tracked_spending=1200,
+                recurring_monthly_total=80,
+                leftover_money=3000,
+                discretionary_remaining=1200,
+                summary_text="You still have room this month, but dining is the swing category.",
+            )
+
+            profile = storage.get_dashboard_data(user_id)
+
+            self.assertEqual(profile["financial_profile"]["monthly_income"], 4200)
+            self.assertEqual(profile["financial_profile"]["fixed_expenses"], 1800)
+            self.assertEqual(profile["financial_profile"]["budgeting_goal"], "Cut dining spend")
+            self.assertEqual(profile["agent_notes"][0]["content"], "Dining usually spikes on weekends.")
+            self.assertEqual(profile["monthly_summary"]["leftover_money"], 3000)
+
+    def test_storage_returns_latest_month_summary_even_if_an_older_month_is_regenerated(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            storage = Storage(f"{tmpdir}/app.db")
+            user_id = storage.create_user("michelle@example.com", "secret123")
+
+            storage.save_monthly_summary(
+                user_id,
+                month_key="2026-04",
+                income=4200,
+                fixed_expenses=1800,
+                tracked_spending=1200,
+                recurring_monthly_total=80,
+                leftover_money=3000,
+                discretionary_remaining=1200,
+                summary_text="April summary",
+            )
+            storage.save_monthly_summary(
+                user_id,
+                month_key="2026-05",
+                income=4300,
+                fixed_expenses=1800,
+                tracked_spending=1000,
+                recurring_monthly_total=90,
+                leftover_money=3300,
+                discretionary_remaining=1400,
+                summary_text="May summary",
+            )
+            storage.save_monthly_summary(
+                user_id,
+                month_key="2026-04",
+                income=4200,
+                fixed_expenses=1800,
+                tracked_spending=1250,
+                recurring_monthly_total=80,
+                leftover_money=2950,
+                discretionary_remaining=1150,
+                summary_text="April summary regenerated later",
+            )
+
+            summary = storage.get_dashboard_data(user_id)["monthly_summary"]
+
+            self.assertEqual(summary["month_key"], "2026-05")
+            self.assertEqual(summary["summary_text"], "May summary")
+
+    def test_storage_rejects_orphan_profile_note_and_summary_writes(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            storage = Storage(f"{tmpdir}/app.db")
+
+            with self.assertRaises(sqlite3.IntegrityError):
+                storage.upsert_financial_profile(
+                    999,
+                    monthly_income=4200,
+                    fixed_expenses=1800,
+                    budgeting_goal="Cut dining spend",
+                )
+
+            with self.assertRaises(sqlite3.IntegrityError):
+                storage.save_agent_note(999, note_type="behavior_pattern", content="No user exists.")
+
+            with self.assertRaises(sqlite3.IntegrityError):
+                storage.save_monthly_summary(
+                    999,
+                    month_key="2026-04",
+                    income=4200,
+                    fixed_expenses=1800,
+                    tracked_spending=1200,
+                    recurring_monthly_total=80,
+                    leftover_money=3000,
+                    discretionary_remaining=1200,
+                    summary_text="Orphan summary",
+                )
 
     def test_storage_saves_chat_history(self):
         with tempfile.TemporaryDirectory() as tmpdir:

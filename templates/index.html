@@ -90,6 +90,14 @@
       display: grid;
       gap: 10px;
     }
+    .profile-form {
+      display: grid;
+      gap: 12px;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+    .profile-form .full {
+      grid-column: 1 / -1;
+    }
     label {
       display: block;
       font-size: 0.88rem;
@@ -151,6 +159,11 @@
     .metric-grid {
       display: grid;
       grid-template-columns: repeat(4, 1fr);
+      gap: 12px;
+    }
+    .summary-grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
       gap: 12px;
     }
     .metric {
@@ -219,7 +232,7 @@
     .good { color: var(--good); }
     .bad { color: var(--bad); }
     @media (max-width: 980px) {
-      .hero, .dashboard, .metric-grid, .hero-points {
+      .hero, .dashboard, .metric-grid, .hero-points, .summary-grid, .profile-form {
         grid-template-columns: 1fr;
       }
     }
@@ -304,6 +317,64 @@
           </div>
 
           <div class="panel">
+            <h2>Monthly plan</h2>
+            <form id="profile-form" class="profile-form">
+              <div>
+                <label for="monthly-income">Monthly income</label>
+                <input
+                  id="monthly-income"
+                  type="number"
+                  step="0.01"
+                  value="{{ profile.financial_profile.monthly_income if profile.financial_profile else 0 }}"
+                >
+              </div>
+              <div>
+                <label for="fixed-expenses">Fixed expenses</label>
+                <input
+                  id="fixed-expenses"
+                  type="number"
+                  step="0.01"
+                  value="{{ profile.financial_profile.fixed_expenses if profile.financial_profile else 0 }}"
+                >
+              </div>
+              <div class="full">
+                <label for="budgeting-goal">Budgeting goal</label>
+                <input
+                  id="budgeting-goal"
+                  type="text"
+                  value="{{ profile.financial_profile.budgeting_goal if profile.financial_profile else '' }}"
+                  placeholder="Example: Spend less on dining"
+                >
+              </div>
+              <div class="full">
+                <button type="submit">Save plan</button>
+              </div>
+            </form>
+            <p id="profile-status" class="status"></p>
+          </div>
+
+          <div class="panel">
+            <h2>Left this month</h2>
+            <div class="summary-grid">
+              <div class="metric">
+                <div class="label">Monthly income</div>
+                <div class="value" id="monthly-income-value">${{ '%.2f'|format(profile.monthly_summary.income if profile.monthly_summary else 0) }}</div>
+              </div>
+              <div class="metric">
+                <div class="label">Fixed expenses</div>
+                <div class="value" id="fixed-expenses-value">${{ '%.2f'|format(profile.monthly_summary.fixed_expenses if profile.monthly_summary else 0) }}</div>
+              </div>
+              <div class="metric">
+                <div class="label">Left this month</div>
+                <div class="value" id="leftover-money">${{ '%.2f'|format(profile.monthly_summary.leftover_money if profile.monthly_summary else 0) }}</div>
+              </div>
+            </div>
+            <p class="muted" id="summary-text" style="margin-top:12px;">
+              {{ profile.monthly_summary.summary_text if profile.monthly_summary else 'Set your monthly income and fixed expenses to calculate real remaining room.' }}
+            </p>
+          </div>
+
+          <div class="panel">
             <h2>Upload a statement</h2>
             <p class="muted">CSV imports become part of your saved history. The chat can then layer in missing spend from Zelle, cash, or split bills.</p>
             <form id="upload-form" class="upload-form">
@@ -379,6 +450,25 @@
           </div>
 
           <div class="panel">
+            <h2>Agent notes</h2>
+            <ul class="list" id="agent-notes-list">
+              {% if profile.agent_notes %}
+                {% for note in profile.agent_notes %}
+                  <li>
+                    <div class="row">
+                      <strong>{{ note.note_type.replace('_', ' ')|title }}</strong>
+                      <span class="small muted">{{ note.created_at }}</span>
+                    </div>
+                    <div class="small">{{ note.content }}</div>
+                  </li>
+                {% endfor %}
+              {% else %}
+                <li class="empty">No agent notes yet. Save your monthly plan or ask the coach for a grounded check-in.</li>
+              {% endif %}
+            </ul>
+          </div>
+
+          <div class="panel">
             <h2>Accountability Chat</h2>
             <p class="muted">Examples: “I ate at Howoo for $50” or “Cancel Netflix.”</p>
             <ul class="list messages" id="messages-list">
@@ -418,10 +508,20 @@
         document.getElementById("transaction-count").textContent = profile.transaction_count;
         document.getElementById("recurring-total").textContent = money(profile.monthly_recurring_total);
         document.getElementById("decision-count").textContent = (profile.subscription_decisions || []).length;
+        document.getElementById("monthly-income-value").textContent = money((profile.monthly_summary || {}).income);
+        document.getElementById("fixed-expenses-value").textContent = money((profile.monthly_summary || {}).fixed_expenses);
+        document.getElementById("leftover-money").textContent = money((profile.monthly_summary || {}).leftover_money);
+        document.getElementById("summary-text").textContent = (profile.monthly_summary || {}).summary_text || "Set your monthly income and fixed expenses to calculate real remaining room.";
+
+        const financialProfile = profile.financial_profile || {};
+        document.getElementById("monthly-income").value = financialProfile.monthly_income ?? 0;
+        document.getElementById("fixed-expenses").value = financialProfile.fixed_expenses ?? 0;
+        document.getElementById("budgeting-goal").value = financialProfile.budgeting_goal || "";
 
         renderTransactions(profile.recent_transactions || []);
         renderSubscriptions(profile.subscriptions || []);
         renderDecisions(profile.subscription_decisions || []);
+        renderAgentNotes(profile.agent_notes || []);
         renderMessages(profile.messages || []);
       }
 
@@ -492,6 +592,48 @@
           </li>
         `).join("");
       }
+
+      function renderAgentNotes(notes) {
+        const list = document.getElementById("agent-notes-list");
+        if (!notes.length) {
+          list.innerHTML = '<li class="empty">No agent notes yet. Save your monthly plan or ask the coach for a grounded check-in.</li>';
+          return;
+        }
+        list.innerHTML = notes.map((note) => `
+          <li>
+            <div class="row">
+              <strong>${String(note.note_type || "").replaceAll("_", " ")}</strong>
+              <span class="small muted">${note.created_at || ""}</span>
+            </div>
+            <div class="small">${note.content || ""}</div>
+          </li>
+        `).join("");
+      }
+
+      document.getElementById("profile-form").addEventListener("submit", async (event) => {
+        event.preventDefault();
+        const status = document.getElementById("profile-status");
+        status.textContent = "Saving monthly plan...";
+
+        const response = await fetch("/api/profile", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            monthly_income: Number(document.getElementById("monthly-income").value || 0),
+            fixed_expenses: Number(document.getElementById("fixed-expenses").value || 0),
+            budgeting_goal: document.getElementById("budgeting-goal").value.trim(),
+          }),
+        });
+        const payload = await response.json();
+
+        if (!response.ok) {
+          status.textContent = payload.error || "Saving failed.";
+          return;
+        }
+
+        renderProfile(payload.profile);
+        status.textContent = "Monthly plan saved.";
+      });
 
       document.getElementById("upload-form").addEventListener("submit", async (event) => {
         event.preventDefault();

@@ -4,15 +4,61 @@ import json
 import os
 import tempfile
 from collections import defaultdict
-from datetime import datetime
+from datetime import UTC, datetime
 
 from flask import Flask, current_app, jsonify, redirect, render_template, request, session, url_for
 
+from agent_service import AgentService, FALLBACK_REPLY, build_openai_llm_client
 from coach import OverspendingCoach
 from csv_parser import CategorizedTransaction, StatementCsvParser
+from financial_state import build_monthly_summary
 from recurrence import RecurringExpenseAnalyzer
 from recommender import BudgetRecommender
 from storage import Storage
+
+
+class _FallbackAgentClient:
+    def __call__(self, payload: dict) -> dict:
+        context = payload.get("context", {})
+        monthly_summary = context.get("monthly_summary") or {}
+        financial_profile = context.get("financial_profile") or {}
+        goal = str(financial_profile.get("budgeting_goal") or "").strip()
+        discretionary_remaining = monthly_summary.get("discretionary_remaining")
+        leftover_money = monthly_summary.get("leftover_money")
+        note_content = ""
+
+        if isinstance(discretionary_remaining, (int, float)):
+            reply = (
+                f"You have ${float(discretionary_remaining):.2f} left after fixed expenses this month."
+            )
+            note_content = reply
+            if goal:
+                reply = f"{reply} That only matters if you still act on: {goal}."
+        elif isinstance(leftover_money, (int, float)):
+            reply = f"You have ${float(leftover_money):.2f} left this month before fixed-expense pressure."
+            note_content = reply
+        else:
+            reply = FALLBACK_REPLY
+
+        actions = []
+        if note_content:
+            actions.append(
+                {
+                    "type": "save_agent_note",
+                    "note_type": "monthly_focus",
+                    "content": note_content,
+                }
+            )
+        return {"reply": reply, "actions": actions}
+
+
+def build_agent_service() -> AgentService:
+    if os.getenv("OPENAI_API_KEY"):
+        try:
+            return AgentService(llm_client=build_openai_llm_client())
+        except Exception:
+            pass
+    return AgentService(llm_client=_FallbackAgentClient())
 
 def _parse_float(form, field: str, default: float = 0.0) -> float:
     raw = form.get(field, str(default)).strip()
@@ -154,6 +200,9 @@ def create_app() -> Flask:
     def get_coach() -> OverspendingCoach:
         return current_app.config["coach"]
 
+    def get_agent_service() -> AgentService:
+        return build_agent_service()
+
     def current_user_id() -> int | None:
         raw = session.get("user_id")
         return int(raw) if raw is not None else None
@@ -164,6 +213,86 @@ def create_app() -> Flask:
             raise PermissionError("Sign in first.")
         return user_id
 
+    def refresh_user_summary(user_id: int) -> dict:
+        storage = get_storage()
+        profile = storage.get_dashboard_data(user_id)
+        financial_profile = profile.get("financial_profile") or {
+            "monthly_income": 0,
+            "fixed_expenses": 0,
+            "budgeting_goal": "",
+        }
+        summary = build_monthly_summary(
+            monthly_income=float(financial_profile.get("monthly_income") or 0),
+            fixed_expenses=float(financial_profile.get("fixed_expenses") or 0),
+            tracked_spending=float(profile.get("total_spent") or 0),
+            recurring_monthly_total=float(profile.get("monthly_recurring_total") or 0),
+        )
+        storage.save_monthly_summary(
+            user_id,
+            month_key=datetime.now(UTC).strftime("%Y-%m"),
+            income=summary["monthly_income"],
+            fixed_expenses=summary["fixed_expenses"],
+            tracked_spending=summary["tracked_spending"],
+            recurring_monthly_total=summary["recurring_monthly_total"],
+            leftover_money=summary["leftover_money"],
+            discretionary_remaining=summary["discretionary_remaining"],
+            summary_text=(
+                f"Left this month: ${summary['leftover_money']:.2f}. "
+                f"Discretionary remaining after fixed expenses: ${summary['discretionary_remaining']:.2f}."
+            ),
+        )
+        return storage.get_dashboard_data(user_id)
+
+    def apply_agent_actions(user_id: int, actions: list[dict]) -> None:
+        storage = get_storage()
+        for action in actions:
+            action_type = action.get("type")
+            if action_type == "save_agent_note":
+                storage.save_agent_note(
+                    user_id,
+                    note_type=action["note_type"],
+                    content=action["content"],
+                )
+            elif action_type == "save_monthly_income":
+                current_profile = storage.get_financial_profile(user_id) or {}
+                storage.upsert_financial_profile(
+                    user_id,
+                    monthly_income=float(action["value"]),
+                    fixed_expenses=float(current_profile.get("fixed_expenses") or 0),
+                    budgeting_goal=str(current_profile.get("budgeting_goal") or ""),
+                )
+            elif action_type == "save_fixed_expense":
+                current_profile = storage.get_financial_profile(user_id) or {}
+                storage.upsert_financial_profile(
+                    user_id,
+                    monthly_income=float(current_profile.get("monthly_income") or 0),
+                    fixed_expenses=float(action["value"]),
+                    budgeting_goal=str(current_profile.get("budgeting_goal") or ""),
+                )
+            elif action_type == "update_goal":
+                current_profile = storage.get_financial_profile(user_id) or {}
+                storage.upsert_financial_profile(
+                    user_id,
+                    monthly_income=float(current_profile.get("monthly_income") or 0),
+                    fixed_expenses=float(current_profile.get("fixed_expenses") or 0),
+                    budgeting_goal=str(action["goal"]),
+                )
+            elif action_type == "mark_subscription_cancel":
+                storage.clear_pending_action(user_id)
+                storage.save_subscription_decision(user_id, action["merchant"], "cancel")
+            elif action_type == "mark_subscription_keep":
+                storage.clear_pending_action(user_id)
+                storage.save_subscription_decision(user_id, action["merchant"], "keep")
+            elif action_type == "confirm_transaction_match":
+                storage.set_pending_action(
+                    user_id,
+                    "confirm_transaction_match",
+                    {"transaction": action["transaction"]},
+                )
+            elif action_type == "add_transaction":
+                storage.clear_pending_action(user_id)
+                storage.add_transactions(user_id, [action["transaction"]])
+
     @app.route("/")
     def index():
         user_id = current_user_id()
@@ -172,7 +301,7 @@ def create_app() -> Flask:
         if user_id is not None:
             user = get_storage().get_user(user_id)
             if user:
-                profile = get_storage().get_dashboard_data(user_id)
+                profile = refresh_user_summary(user_id)
             else:
                 session.pop("user_id", None)
 
@@ -213,6 +342,23 @@ def create_app() -> Flask:
     def logout():
         session.pop("user_id", None)
         return redirect(url_for("index"))
+
+    @app.route("/api/profile", methods=["POST"])
+    def update_profile():
+        try:
+            user_id = require_user_id()
+        except PermissionError as exc:
+            return jsonify({"error": str(exc)}), 401
+
+        payload = request.get_json(silent=True) or {}
+        get_storage().upsert_financial_profile(
+            user_id,
+            monthly_income=float(payload.get("monthly_income", 0)),
+            fixed_expenses=float(payload.get("fixed_expenses", 0)),
+            budgeting_goal=str(payload.get("budgeting_goal", "")).strip(),
+        )
+        profile = refresh_user_summary(user_id)
+        return jsonify({"profile": profile})
 
     @app.route("/api/analyze", methods=["POST"])
     def analyze_statement():
@@ -327,10 +473,16 @@ def create_app() -> Flask:
                     for item in transactions
                 ],
             )
+            profile = refresh_user_summary(user_id)
+            agent_result = get_agent_service().run_chat_turn(
+                message="I uploaded a new statement. Update my coaching notes.",
+                agent_context=profile,
+            )
+            apply_agent_actions(user_id, agent_result["actions"])
             return jsonify(
                 {
                     "saved_transactions": len(transactions),
-                    "profile": get_storage().get_dashboard_data(user_id),
+                    "profile": refresh_user_summary(user_id),
                 }
             )
         except ValueError as exc:
@@ -352,36 +504,24 @@ def create_app() -> Flask:
             return jsonify({"error": "Message is required."}), 400
 
         storage = get_storage()
-        coach = get_coach()
-        profile = storage.get_dashboard_data(user_id)
-        result = coach.process_message(message, profile)
+        profile = refresh_user_summary(user_id)
+        heuristic_result = get_coach().process_message(message, profile)
+        action = heuristic_result["action"]
+        if action["type"] != "none":
+            apply_agent_actions(user_id, [action])
 
+        profile = refresh_user_summary(user_id)
+        agent_result = get_agent_service().run_chat_turn(message=message, agent_context=profile)
+        apply_agent_actions(user_id, agent_result["actions"])
+
+        reply = agent_result["reply"] or heuristic_result["reply"]
         storage.add_chat_message(user_id, "user", message)
-        storage.add_chat_message(user_id, "assistant", result["reply"])
+        storage.add_chat_message(user_id, "assistant", reply)
 
-        action = result["action"]
-        if action["type"] == "add_transaction":
-            storage.clear_pending_action(user_id)
-            storage.add_transactions(user_id, [action["transaction"]])
-        elif action["type"] == "confirm_transaction_match":
-            storage.set_pending_action(
-                user_id,
-                "confirm_transaction_match",
-                {"transaction": action["transaction"]},
-            )
-        elif action["type"] == "clear_pending_action":
-            storage.clear_pending_action(user_id)
-        elif action["type"] == "mark_subscription_cancel":
-            storage.clear_pending_action(user_id)
-            storage.save_subscription_decision(user_id, action["merchant"], "cancel")
-        elif action["type"] == "mark_subscription_keep":
-            storage.clear_pending_action(user_id)
-            storage.save_subscription_decision(user_id, action["merchant"], "keep")
-
-        updated_profile = storage.get_dashboard_data(user_id)
+        updated_profile = refresh_user_summary(user_id)
         return jsonify(
             {
-                "reply": result["reply"],
+                "reply": reply,
                 "action": action,
                 "messages": updated_profile["messages"],
                 "profile": updated_profile,
