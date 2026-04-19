@@ -1,6 +1,9 @@
+import sys
+import types
 import unittest
+from unittest.mock import patch
 
-from agent_service import AgentService
+from agent_service import AgentService, _summarize_context
 from financial_state import build_monthly_summary
 
 
@@ -78,6 +81,31 @@ class FinancialStateTests(unittest.TestCase):
 
 
 class AgentServiceTests(unittest.TestCase):
+    def test_context_summary_includes_recent_messages_and_subscription_context(self):
+        summary = _summarize_context(
+            {
+                "message": "Should I keep it?",
+                "context": {
+                    "selected_month_label": "April 2026",
+                    "monthly_summary": {"leftover_money": 950},
+                    "financial_profile": {"budgeting_goal": "Trim subscriptions"},
+                    "category_breakdown": [{"category": "Dining", "amount": 120.0}],
+                    "subscriptions": [{"merchant": "Netflix", "monthly_equivalent": 15.49}],
+                    "agent_notes": [{"note_type": "April 2026 focus", "content": "Watch dining."}],
+                    "messages": [
+                        {"role": "assistant", "content": "I noticed Netflix."},
+                        {"role": "user", "content": "Should I keep it?"},
+                    ],
+                },
+                "allowed_action_types": ["mark_subscription_keep"],
+            }
+        )
+
+        self.assertIn("Latest user message: Should I keep it?", summary)
+        self.assertIn("Selected month: April 2026", summary)
+        self.assertIn('"merchant": "Netflix"', summary)
+        self.assertIn('"content": "I noticed Netflix."', summary)
+
     def test_agent_service_parses_llm_actions_and_notes(self):
         fake_response = {
             "reply": "You have $950 left after fixed costs. Dining is still the weak spot.",
@@ -161,3 +189,34 @@ class AgentServiceTests(unittest.TestCase):
                 "actions": [],
             },
         )
+
+    def test_openai_client_uses_conversational_system_prompt(self):
+        captured = {}
+
+        class FakeResponses:
+            def create(self, **kwargs):
+                captured.update(kwargs)
+                return type("FakeResponse", (), {"output_text": '{"reply":"ok","actions":[]}'})()
+
+        class FakeOpenAI:
+            def __init__(self):
+                self.responses = FakeResponses()
+
+        fake_module = types.ModuleType("openai")
+        fake_module.OpenAI = FakeOpenAI
+
+        with patch.dict(sys.modules, {"openai": fake_module}):
+            from agent_service import build_openai_llm_client
+
+            client = build_openai_llm_client()
+            client(
+                {
+                    "message": "Should I keep Netflix?",
+                    "context": {"messages": [{"role": "assistant", "content": "Netflix costs $15.49"}]},
+                    "allowed_action_types": ["mark_subscription_keep"],
+                }
+            )
+
+        self.assertEqual(captured["model"], "gpt-5-mini")
+        self.assertIn("Behave like a thoughtful, conversational assistant", captured["input"][0]["content"])
+        self.assertIn("Latest user message: Should I keep Netflix?", captured["input"][1]["content"])

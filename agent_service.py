@@ -3,6 +3,62 @@ from collections.abc import Mapping
 
 
 FALLBACK_REPLY = "I couldn't produce a reliable coaching response right now."
+SYSTEM_PROMPT = """
+You are an agentic personal finance coach inside a budgeting app.
+Behave like a thoughtful, conversational assistant, not a rigid classifier.
+
+Your job:
+- answer the user's actual question directly
+- use the provided recent conversation and financial context
+- be specific about the selected month when relevant
+- give practical advice, tradeoffs, and a recommendation when the user asks what they should do
+- suggest or emit structured actions when the user is clearly asking to save data or update the account
+
+Action rules:
+- only emit actions from the allowed_action_types list
+- emit no action when the user is just asking for advice or explanation
+- if the user says they spent money, you may add a transaction
+- if the user asks to keep or cancel a subscription, you may mark that decision
+- if the user asks about money left, categories, or trends, answer directly without forcing an action
+
+Response format:
+- return valid JSON only
+- top-level object with:
+  - "reply": string
+  - "actions": array
+""".strip()
+
+
+def _summarize_context(payload: dict) -> str:
+    context = payload.get("context") or {}
+    message = str(payload.get("message") or "").strip()
+    monthly_summary = context.get("monthly_summary") or {}
+    financial_profile = context.get("financial_profile") or {}
+    category_breakdown = context.get("category_breakdown") or []
+    subscriptions = context.get("subscriptions") or []
+    notes = context.get("agent_notes") or []
+    recent_messages = (context.get("messages") or [])[-8:]
+    selected_month = context.get("selected_month_label") or "Unknown month"
+
+    lines = [
+        f"Latest user message: {message}",
+        f"Selected month: {selected_month}",
+        "Monthly summary:",
+        json.dumps(monthly_summary, ensure_ascii=True),
+        "Financial profile:",
+        json.dumps(financial_profile, ensure_ascii=True),
+        "Top spending categories:",
+        json.dumps(category_breakdown[:5], ensure_ascii=True),
+        "Recurring subscriptions:",
+        json.dumps(subscriptions[:5], ensure_ascii=True),
+        "Agent notes:",
+        json.dumps(notes[:5], ensure_ascii=True),
+        "Recent conversation:",
+        json.dumps(recent_messages, ensure_ascii=True),
+        "Allowed action types:",
+        json.dumps(payload.get("allowed_action_types") or [], ensure_ascii=True),
+    ]
+    return "\n".join(lines)
 
 
 def build_openai_llm_client():
@@ -16,9 +72,9 @@ def build_openai_llm_client():
             input=[
                 {
                     "role": "system",
-                    "content": "You are a personal finance coaching agent. Return JSON only.",
+                    "content": SYSTEM_PROMPT,
                 },
-                {"role": "user", "content": json.dumps(payload)},
+                {"role": "user", "content": _summarize_context(payload)},
             ],
         )
         return json.loads(response.output_text)
