@@ -208,6 +208,40 @@ class AppRouteTests(unittest.TestCase):
             [note["content"] for note in payload["profile"]["agent_notes"]],
         )
 
+    def test_chat_route_falls_back_to_local_coaching_when_openai_reply_is_generic_failure(self):
+        self.client.post("/signup", data={"email": "demo@example.com", "password": "secret123"})
+        self.client.post(
+            "/api/profile",
+            json={
+                "monthly_income": 3000,
+                "fixed_expenses": 1000,
+                "budgeting_goal": "Trim subscriptions",
+            },
+        )
+        recurring_csv = """Transaction Date,Description,Category,Amount
+02/01/2026,NETFLIX.COM,Subscriptions,-15.49
+03/02/2026,NETFLIX.COM,Subscriptions,-15.49
+04/03/2026,NETFLIX.COM,Subscriptions,-15.49
+"""
+        self.client.post(
+            "/api/upload-statement",
+            data={"statement": (io.BytesIO(recurring_csv.encode("utf-8")), "statement.csv")},
+            content_type="multipart/form-data",
+        )
+
+        with patch("app.build_agent_service") as build_agent_service:
+            build_agent_service.return_value.run_chat_turn.return_value = {
+                "reply": "I couldn't produce a reliable coaching response right now.",
+                "actions": [],
+            }
+
+            response = self.client.post("/api/chat", json={"message": "Should I keep Netflix?"})
+
+        payload = response.get_json()
+        self.assertEqual(response.status_code, 200)
+        self.assertNotEqual(payload["reply"], "I couldn't produce a reliable coaching response right now.")
+        self.assertIn("Netflix", payload["reply"])
+
     def test_upload_generates_proactive_ai_chatbot_message_with_recurring_and_category_context(self):
         self.client.post("/signup", data={"email": "demo@example.com", "password": "secret123"})
         self.client.post(

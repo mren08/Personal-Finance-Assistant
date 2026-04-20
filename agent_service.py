@@ -93,7 +93,7 @@ def _parse_json_response(text: str) -> dict:
 def _candidate_models() -> list[str]:
     preferred = str(os.getenv("OPENAI_MODEL", "")).strip()
     models = [preferred] if preferred else []
-    models.extend(["gpt-5-mini", "gpt-4.1-mini"])
+    models.extend(["gpt-5.4-mini", "gpt-5-mini", "gpt-4.1-mini"])
 
     deduped = []
     for model in models:

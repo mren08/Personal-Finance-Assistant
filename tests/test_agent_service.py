@@ -245,7 +245,7 @@ class AgentServiceTests(unittest.TestCase):
                 }
             )
 
-        self.assertEqual(captured["model"], "gpt-5-mini")
+        self.assertEqual(captured["model"], "gpt-5.4-mini")
         self.assertIn("Behave like a thoughtful, conversational assistant", captured["input"][0]["content"])
         self.assertIn("Latest user message: Should I keep Netflix?", captured["input"][1]["content"])
 
@@ -255,7 +255,7 @@ class AgentServiceTests(unittest.TestCase):
         class FakeResponses:
             def create(self, **kwargs):
                 calls.append(kwargs["model"])
-                if kwargs["model"] == "gpt-5-mini":
+                if kwargs["model"] == "gpt-5.4-mini":
                     raise RuntimeError("model unavailable")
                 return type("FakeResponse", (), {"output_text": '```json {"reply":"ok","actions":[]} ```'})()
 
@@ -272,5 +272,5 @@ class AgentServiceTests(unittest.TestCase):
             client = build_openai_llm_client()
             result = client({"message": "Hi", "context": {}, "allowed_action_types": []})
 
-        self.assertEqual(calls, ["gpt-5-mini", "gpt-4.1-mini"])
+        self.assertEqual(calls, ["gpt-5.4-mini", "gpt-5-mini"])
         self.assertEqual(result, {"reply": "ok", "actions": []})

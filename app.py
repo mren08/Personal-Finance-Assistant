@@ -352,6 +352,12 @@ def _merge_selected_month_into_transaction(transaction: dict, selected_month: st
     updated["date"] = f"{selected_month}-{day:02d}"
     return updated
 
+
+def _recover_agent_result(message: str, profile: dict, agent_result: dict) -> dict:
+    if agent_result.get("reply") != FALLBACK_REPLY or agent_result.get("actions"):
+        return agent_result
+    return AgentService(llm_client=_FallbackAgentClient()).run_chat_turn(message=message, agent_context=profile)
+
 def _parse_float(form, field: str, default: float = 0.0) -> float:
     raw = form.get(field, str(default)).strip()
     if raw == "":
@@ -825,6 +831,11 @@ def create_app() -> Flask:
                 message="I uploaded a new statement. Update my coaching notes.",
                 agent_context=profile,
             )
+            agent_result = _recover_agent_result(
+                message="I uploaded a new statement. Update my coaching notes.",
+                profile=profile,
+                agent_result=agent_result,
+            )
             monthly_focus_content = _extract_monthly_focus_content(agent_result["actions"])
             apply_agent_actions(user_id, agent_result["actions"])
             profile = refresh_user_summary(user_id, session.get("selected_month"))
@@ -865,6 +876,7 @@ def create_app() -> Flask:
 
         profile = refresh_user_summary(user_id, session.get("selected_month"))
         agent_result = get_agent_service().run_chat_turn(message=message, agent_context=profile)
+        agent_result = _recover_agent_result(message=message, profile=profile, agent_result=agent_result)
         monthly_focus_content = _extract_monthly_focus_content(agent_result["actions"])
         apply_agent_actions(user_id, agent_result["actions"])
 
