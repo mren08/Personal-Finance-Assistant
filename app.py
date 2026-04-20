@@ -37,9 +37,12 @@ class _FallbackAgentClient:
         strongest_subscription = subscriptions[0] if subscriptions else None
         referenced_subscription = _resolve_referenced_subscription(message, context)
         note_content = str(notes[0]["content"]).strip() if notes else ""
+        merchant_reply = _merchant_rank_reply(message, context)
         topic_reply = _category_topic_reply(message, context)
 
-        if topic_reply:
+        if merchant_reply:
+            reply = merchant_reply
+        elif topic_reply:
             reply = topic_reply
         elif referenced_subscription and any(token in message for token in {"should i keep", "keep it", "cancel it", "should i cancel"}):
             reply = self._subscription_recommendation(
@@ -185,7 +188,7 @@ def _month_label(month_key: str | None) -> str:
 def _display_merchant(name: str) -> str:
     cleaned = str(name).replace(".COM", "").replace(".com", "").strip()
     if cleaned.isupper():
-        return cleaned.title()
+        return cleaned.title().replace("'S", "'s")
     return cleaned
 
 
@@ -239,6 +242,85 @@ def _category_topic_reply(message: str, context: dict) -> str | None:
     month_phrase = f"across {len(overall_months)} uploaded months"
     topic_label = chosen_topic.title()
     return f"Your average monthly {chosen_topic} spend is ${average:.2f} {month_phrase}, with ${total:.2f} total tracked in {topic_label}."
+
+
+def _merchant_rank_reply(message: str, context: dict) -> str | None:
+    lowered = str(message).lower()
+    if not any(token in lowered for token in {"biggest", "top", "largest"}):
+        return None
+    if "merchant" not in lowered:
+        return None
+
+    all_transactions = context.get("all_transactions") or context.get("transactions") or []
+    if not all_transactions:
+        return None
+
+    month_names = {
+        "january": "01",
+        "february": "02",
+        "march": "03",
+        "april": "04",
+        "may": "05",
+        "june": "06",
+        "july": "07",
+        "august": "08",
+        "september": "09",
+        "october": "10",
+        "november": "11",
+        "december": "12",
+    }
+    month_number = next((number for name, number in month_names.items() if name in lowered), None)
+    if not month_number:
+        selected_month = context.get("selected_month")
+        if selected_month:
+            month_number = selected_month.split("-")[1]
+        else:
+            return None
+
+    category_aliases = {
+        "food and drink": {"food & drink", "food and drink", "dining", "restaurant", "restaurants", "food"},
+        "groceries": {"groceries", "grocery", "supermarket"},
+        "travel": {"travel", "transport", "gas", "fuel"},
+    }
+    chosen_category = next(
+        (
+            category
+            for category, aliases in category_aliases.items()
+            if any(alias in lowered for alias in aliases)
+        ),
+        None,
+    )
+    if not chosen_category:
+        return None
+
+    def category_matches(transaction: dict) -> bool:
+        category = str(transaction.get("category") or "").lower()
+        description = str(transaction.get("description") or "").lower()
+        aliases = category_aliases[chosen_category]
+        return any(alias in category for alias in aliases) or any(alias in description for alias in aliases)
+
+    filtered = [
+        transaction
+        for transaction in all_transactions
+        if str(transaction.get("date") or "")[5:7] == month_number and category_matches(transaction)
+    ]
+    if not filtered:
+        return None
+
+    merchant_totals: dict[str, float] = {}
+    merchant_display: dict[str, str] = {}
+    for transaction in filtered:
+        description = str(transaction.get("description") or "").strip()
+        key = re.sub(r"\s+", " ", description).strip().lower()
+        merchant_totals[key] = merchant_totals.get(key, 0.0) + float(transaction.get("amount") or 0)
+        merchant_display[key] = _display_merchant(description)
+
+    top_key, top_amount = max(merchant_totals.items(), key=lambda item: item[1])
+    top_month_label = next((name.title() for name, number in month_names.items() if number == month_number), "that month")
+    return (
+        f"Your biggest {chosen_category} merchant for {top_month_label} was "
+        f"{merchant_display[top_key]} at ${top_amount:.2f}."
+    )
 
 
 def _resolve_referenced_subscription(message: str, context: dict) -> dict | None:
@@ -699,13 +781,20 @@ def create_app() -> Flask:
             return jsonify({"error": str(exc)}), 401
 
         payload = request.get_json(silent=True) or {}
+        requested_month = payload.get("month") or session.get("selected_month") or datetime.now(UTC).strftime("%Y-%m")
         get_storage().upsert_financial_profile(
             user_id,
             monthly_income=float(payload.get("monthly_income", 0)),
             fixed_expenses=float(payload.get("fixed_expenses", 0)),
             budgeting_goal=str(payload.get("budgeting_goal", "")).strip(),
         )
-        requested_month = payload.get("month") or session.get("selected_month")
+        get_storage().save_monthly_plan(
+            user_id,
+            month_key=requested_month,
+            monthly_income=float(payload.get("monthly_income", 0)),
+            fixed_expenses=float(payload.get("fixed_expenses", 0)),
+            budgeting_goal=str(payload.get("budgeting_goal", "")).strip(),
+        )
         profile = refresh_user_summary(user_id, requested_month)
         session["selected_month"] = profile.get("selected_month")
         profile = update_current_month_focus_note(user_id, profile)

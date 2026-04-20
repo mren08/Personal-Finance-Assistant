@@ -47,17 +47,18 @@
     }
     .eyebrow {
       text-transform: uppercase;
-      font-size: 12px;
-      letter-spacing: 0.12em;
+      font-size: 14px;
+      letter-spacing: 0.16em;
       color: var(--accent);
-      font-weight: 700;
+      font-weight: 800;
+      margin-bottom: 10px;
     }
     h1, h2, h3, p { margin-top: 0; }
     h1 {
-      font-size: clamp(2.4rem, 4.6vw, 4.4rem);
-      line-height: 0.96;
+      font-size: clamp(2rem, 3.2vw, 3.2rem);
+      line-height: 1.02;
       margin-bottom: 14px;
-      max-width: 8ch;
+      max-width: 12ch;
     }
     .subhead {
       color: var(--muted);
@@ -167,6 +168,19 @@
       width: auto;
       background: #fff;
     }
+    .panel-toolbar {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 12px;
+      flex-wrap: wrap;
+      margin-bottom: 12px;
+    }
+    .panel-toolbar select {
+      min-width: 180px;
+      width: auto;
+      background: #fff;
+    }
     .metric-grid {
       display: grid;
       grid-template-columns: repeat(4, 1fr);
@@ -259,6 +273,9 @@
       border-radius: 16px;
       padding: 14px;
     }
+    .plan-history {
+      margin-top: 14px;
+    }
     .metric .label {
       color: var(--muted);
       font-size: 0.82rem;
@@ -332,17 +349,17 @@
       <section class="hero">
         <div>
           <div class="eyebrow">Personal Finance AI Assistant</div>
-          <h1>help you achieve your budgeting goals.</h1>
-          <p class="subhead">A personal finance assistant that helps you understand spending, track subscriptions, and add missing transactions through chat without losing your running history.</p>
+          <h1>Build Better Budgeting Habits with an AI Assistant</h1>
+          <p class="subhead">A personal finance assistant that helps you understand spending, spot patterns, review subscriptions, add missing transactions, and get ongoing budgeting guidance without losing your running history.</p>
           <div class="hero-points">
-            <div><strong>Persistent profile</strong><br>Keep a running history tied to your account.</div>
+            <div><strong>Personalized profile</strong><br>Keep a running history tied to your account.</div>
             <div><strong>Subscription pressure</strong><br>Surface recurring charges and overlapping services.</div>
-            <div><strong>Actionable chat</strong><br>Tell the agent what you bought or what you want to cut.</div>
+            <div><strong>Actionable chat</strong><br>Ask budgeting questions, add missing spend, and get guidance on what to keep or cut.</div>
           </div>
         </div>
         <div class="auth-card">
           <h2>Start tracking</h2>
-          <p>Create an account, upload a statement, then use the chatbox to add missing spend like cash, bank transfers, or split bills.</p>
+          <p>Create an account, upload a statement, then use the chatbox to add missing spend, review subscriptions, and get personalized budgeting guidance based on your spending history.</p>
           <form class="form-stack" method="post" action="/signup">
             <div>
               <label for="signup-email">Email</label>
@@ -373,7 +390,7 @@
         <div>
           <div class="eyebrow">Personal Finance AI Assistant</div>
           <h1 style="font-size:2.5rem; max-width:none; margin-bottom:6px;">Your spending history now has memory.</h1>
-          <p class="subhead" style="margin-bottom:0;">Signed in as {{ user.email }}. Upload fresh data, then use the AI Chatbot to add missing spend or mark subscriptions you are keeping versus cutting.</p>
+          <p class="subhead" style="margin-bottom:0;">Signed in as {{ user.email }}. Upload fresh data, then use the AI Chatbot to add missing spend, review subscriptions, and get ongoing budgeting help grounded in your spending history.</p>
         </div>
         <div class="month-switcher">
           <div>
@@ -450,6 +467,21 @@
               </div>
             </form>
             <p id="profile-status" class="status"></p>
+            <ul class="list plan-history" id="monthly-plan-history">
+              {% if profile.monthly_plan_history %}
+                {% for plan in profile.monthly_plan_history %}
+                  <li>
+                    <div class="row">
+                      <strong>{{ plan.month_label }}</strong>
+                      <span class="small muted">{{ plan.updated_at }}</span>
+                    </div>
+                    <div class="small">{{ plan.summary }}</div>
+                  </li>
+                {% endfor %}
+              {% else %}
+                <li class="empty">No monthly plans saved yet. Save income, fixed expenses, and a goal for the selected month.</li>
+              {% endif %}
+            </ul>
           </div>
 
           <div class="panel">
@@ -522,7 +554,18 @@
           </div>
 
           <div class="panel">
-            <h2 id="transactions-heading">Recent transactions for {{ profile.selected_month_label or 'selected month' }}</h2>
+            <div class="panel-toolbar">
+              <h2 id="transactions-heading" style="margin-bottom:0;">Recent transactions for {{ profile.selected_month_label or 'selected month' }}</h2>
+              <div>
+                <label for="transactions-category-filter">Filter by category</label>
+                <select id="transactions-category-filter">
+                  <option value="all">All categories</option>
+                  {% for category, amount in profile.category_totals.items() %}
+                    <option value="{{ category }}">{{ category }}</option>
+                  {% endfor %}
+                </select>
+              </div>
+            </div>
             <ul class="list transactions" id="transactions-list">
               {% if profile.recent_transactions %}
                 {% for transaction in profile.recent_transactions %}
@@ -634,11 +677,14 @@
   {% if logged_in %}
     <div id="chart-tooltip" class="chart-tooltip" aria-hidden="true"></div>
     <script>
+      let currentProfile = {{ profile|tojson }};
+
       function money(value) {
         return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(value || 0);
       }
 
       function renderProfile(profile) {
+        currentProfile = profile;
         const monthLabel = profile.selected_month_label || "this month";
         document.getElementById("selected-month-label").textContent = `Viewing ${profile.selected_month_label || "No month selected"}`;
         document.getElementById("leftover-heading").textContent = `Left in ${monthLabel}`;
@@ -653,16 +699,18 @@
         document.getElementById("leftover-money").textContent = money((profile.monthly_summary || {}).leftover_money);
         document.getElementById("summary-text").textContent = (profile.monthly_summary || {}).summary_text || "Set your monthly income and fixed expenses to calculate real remaining room.";
         renderMonthSelector(profile.available_months || [], profile.selected_month || "");
+        renderTransactionFilter(profile.category_totals || {});
 
         const financialProfile = profile.financial_profile || {};
         document.getElementById("monthly-income").value = financialProfile.monthly_income ?? 0;
         document.getElementById("fixed-expenses").value = financialProfile.fixed_expenses ?? 0;
         document.getElementById("budgeting-goal").value = financialProfile.budgeting_goal || "";
 
-        renderTransactions(profile.recent_transactions || []);
+        renderTransactions(applyTransactionFilter(profile.transactions || []));
         renderSubscriptions(profile.subscriptions || []);
         renderDecisions(profile.subscription_decisions || []);
         renderCategoryBreakdown(profile.category_breakdown || [], profile.total_spent || 0);
+        renderMonthlyPlanHistory(profile.monthly_plan_history || []);
         renderAgentNotes(profile.agent_notes || []);
         renderMessages(profile.messages || []);
       }
@@ -672,6 +720,25 @@
         selector.innerHTML = months.map((month) => `
           <option value="${month.key}" ${month.key === selectedMonth ? "selected" : ""}>${month.label}</option>
         `).join("");
+      }
+
+      function renderTransactionFilter(categoryTotals) {
+        const selector = document.getElementById("transactions-category-filter");
+        const currentValue = selector.value || "all";
+        const categories = Object.keys(categoryTotals || {});
+        selector.innerHTML = `
+          <option value="all">All categories</option>
+          ${categories.map((category) => `<option value="${category}">${category}</option>`).join("")}
+        `;
+        selector.value = categories.includes(currentValue) || currentValue === "all" ? currentValue : "all";
+      }
+
+      function applyTransactionFilter(transactions) {
+        const selectedCategory = document.getElementById("transactions-category-filter").value || "all";
+        if (selectedCategory === "all") {
+          return (transactions || []).slice(0, 12);
+        }
+        return (transactions || []).filter((transaction) => transaction.category === selectedCategory).slice(0, 12);
       }
 
       function attachTooltipHandlers() {
@@ -809,6 +876,23 @@
         `).join("");
       }
 
+      function renderMonthlyPlanHistory(plans) {
+        const list = document.getElementById("monthly-plan-history");
+        if (!plans.length) {
+          list.innerHTML = '<li class="empty">No monthly plans saved yet. Save income, fixed expenses, and a goal for the selected month.</li>';
+          return;
+        }
+        list.innerHTML = plans.map((plan) => `
+          <li>
+            <div class="row">
+              <strong>${plan.month_label}</strong>
+              <span class="small muted">${plan.updated_at || ""}</span>
+            </div>
+            <div class="small">${plan.summary}</div>
+          </li>
+        `).join("");
+      }
+
       function renderMessages(messages) {
         const list = document.getElementById("messages-list");
         if (!messages.length) {
@@ -911,11 +995,22 @@
         input.value = "";
       });
 
+      document.getElementById("chat-input").addEventListener("keydown", (event) => {
+        if (event.key === "Enter" && !event.shiftKey) {
+          event.preventDefault();
+          document.getElementById("chat-form").requestSubmit();
+        }
+      });
+
+      document.getElementById("transactions-category-filter").addEventListener("change", () => {
+        renderTransactions(applyTransactionFilter((currentProfile && currentProfile.transactions) || []));
+      });
+
       document.getElementById("month-selector").addEventListener("change", (event) => {
         window.location.assign(`/?month=${encodeURIComponent(event.currentTarget.value)}`);
       });
 
-      renderProfile({{ profile|tojson }});
+      renderProfile(currentProfile);
     </script>
   {% endif %}
 </body>

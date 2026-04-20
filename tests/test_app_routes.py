@@ -29,6 +29,15 @@ GAS_AND_MEMBERSHIP_CSV = """Transaction Date,Description,Category,Amount
 02/07/2026,CLR*ClubPilate7187010242,Wellness,-99.65
 """
 
+OCT_NOV_FOOD_CSV = """Transaction Date,Description,Category,Amount
+10/03/2025,SWEETGREEN,Food & Drink,-18.25
+10/11/2025,SWEETGREEN,Food & Drink,-24.75
+10/15/2025,JOE'S PIZZA,Food & Drink,-31.50
+10/22/2025,JOE'S PIZZA,Food & Drink,-29.00
+11/04/2025,STARBUCKS,Food & Drink,-9.47
+11/12/2025,CHIPOTLE,Food & Drink,-14.80
+"""
+
 
 class AppRouteTests(unittest.TestCase):
     def setUp(self):
@@ -47,7 +56,7 @@ class AppRouteTests(unittest.TestCase):
         response = self.client.get("/")
 
         self.assertEqual(response.status_code, 200)
-        self.assertIn(b"help you achieve your budgeting goals", response.data)
+        self.assertIn(b"Build Better Budgeting Habits with an AI Assistant", response.data)
 
     def test_healthcheck_returns_ok(self):
         response = self.client.get("/healthz")
@@ -171,6 +180,66 @@ class AppRouteTests(unittest.TestCase):
             payload["profile"]["agent_notes"][0]["note_type"],
             f"{datetime.now(UTC).strftime('%B %Y')} focus",
         )
+
+    def test_monthly_plan_saves_month_scoped_entry_and_can_be_edited(self):
+        self.client.post("/signup", data={"email": "demo@example.com", "password": "secret123"})
+        self.client.post(
+            "/api/upload-statement",
+            data={"statement": (io.BytesIO(MULTI_MONTH_CSV.encode("utf-8")), "statement.csv")},
+            content_type="multipart/form-data",
+        )
+
+        april_response = self.client.post(
+            "/api/profile",
+            json={
+                "month": "2026-04",
+                "monthly_income": 3000,
+                "fixed_expenses": 500,
+                "budgeting_goal": "Save 500 for a trip",
+            },
+        )
+        april_payload = april_response.get_json()
+
+        self.assertEqual(april_response.status_code, 200)
+        self.assertEqual(april_payload["profile"]["financial_profile"]["monthly_income"], 3000)
+        self.assertEqual(april_payload["profile"]["financial_profile"]["fixed_expenses"], 500)
+        self.assertEqual(april_payload["profile"]["financial_profile"]["budgeting_goal"], "Save 500 for a trip")
+        self.assertIn(
+            "April 2026, monthly income of $3000.00, fixed expenses of $500.00, goal is to Save 500 for a trip",
+            [item["summary"] for item in april_payload["profile"]["monthly_plan_history"]],
+        )
+
+        march_response = self.client.post(
+            "/api/profile",
+            json={
+                "month": "2026-03",
+                "monthly_income": 2800,
+                "fixed_expenses": 650,
+                "budgeting_goal": "Pay down dining overspend",
+            },
+        )
+        march_payload = march_response.get_json()
+        self.assertEqual(march_response.status_code, 200)
+        self.assertEqual(march_payload["profile"]["selected_month"], "2026-03")
+        self.assertEqual(march_payload["profile"]["financial_profile"]["monthly_income"], 2800)
+        self.assertEqual(len(march_payload["profile"]["monthly_plan_history"]), 2)
+
+        edited_response = self.client.post(
+            "/api/profile",
+            json={
+                "month": "2026-04",
+                "monthly_income": 3200,
+                "fixed_expenses": 550,
+                "budgeting_goal": "Save 700 for a trip",
+            },
+        )
+        edited_payload = edited_response.get_json()
+        self.assertEqual(edited_response.status_code, 200)
+        self.assertEqual(edited_payload["profile"]["financial_profile"]["monthly_income"], 3200)
+        april_entry = next(
+            item for item in edited_payload["profile"]["monthly_plan_history"] if item["month_key"] == "2026-04"
+        )
+        self.assertIn("April 2026, monthly income of $3200.00, fixed expenses of $550.00", april_entry["summary"])
 
     def test_chat_route_persists_agent_note_from_llm_result(self):
         self.client.post("/signup", data={"email": "demo@example.com", "password": "secret123"})
@@ -420,6 +489,25 @@ class AppRouteTests(unittest.TestCase):
         self.assertIn("average monthly gas spend is $99.65", payload["reply"].lower())
         self.assertNotIn("main focus", payload["reply"].lower())
 
+    def test_ai_chatbot_identifies_biggest_food_and_drink_merchant_for_named_month(self):
+        self.client.post("/signup", data={"email": "demo@example.com", "password": "secret123"})
+        self.client.post(
+            "/api/upload-statement",
+            data={"statement": (io.BytesIO(OCT_NOV_FOOD_CSV.encode("utf-8")), "statement.csv")},
+            content_type="multipart/form-data",
+        )
+
+        response = self.client.post(
+            "/api/chat",
+            json={"message": "identify the biggest food and drink merchant for october"},
+        )
+        payload = response.get_json()
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("October", payload["reply"])
+        self.assertIn("Joe's Pizza", payload["reply"])
+        self.assertIn("$60.50", payload["reply"])
+
     def test_gas_station_repeat_charges_are_not_treated_as_recurring_subscriptions(self):
         self.client.post("/signup", data={"email": "demo@example.com", "password": "secret123"})
         response = self.client.post(
@@ -452,6 +540,7 @@ class AppRouteTests(unittest.TestCase):
         self.assertIn(b"Category breakdown", response.data)
         self.assertIn(b"category-donut-chart", response.data)
         self.assertIn(b"month-selector", response.data)
+        self.assertIn(b"transactions-category-filter", response.data)
         self.assertIn(b"data-tooltip=", response.data)
         self.assertIn(b"chart-tooltip", response.data)
 

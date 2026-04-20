@@ -73,6 +73,17 @@ class Storage:
                     updated_at TEXT DEFAULT CURRENT_TIMESTAMP
                 );
 
+                CREATE TABLE IF NOT EXISTS monthly_plans (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                    month_key TEXT NOT NULL,
+                    monthly_income REAL NOT NULL DEFAULT 0,
+                    fixed_expenses REAL NOT NULL DEFAULT 0,
+                    budgeting_goal TEXT NOT NULL DEFAULT '',
+                    updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                    UNIQUE(user_id, month_key)
+                );
+
                 CREATE TABLE IF NOT EXISTS agent_notes (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -283,6 +294,34 @@ class Storage:
                 (user_id, round(float(monthly_income), 2), round(float(fixed_expenses), 2), budgeting_goal),
             )
 
+    def save_monthly_plan(
+        self,
+        user_id: int,
+        month_key: str,
+        monthly_income: float,
+        fixed_expenses: float,
+        budgeting_goal: str,
+    ) -> None:
+        with self._connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO monthly_plans (user_id, month_key, monthly_income, fixed_expenses, budgeting_goal)
+                VALUES (?, ?, ?, ?, ?)
+                ON CONFLICT(user_id, month_key) DO UPDATE SET
+                    monthly_income = excluded.monthly_income,
+                    fixed_expenses = excluded.fixed_expenses,
+                    budgeting_goal = excluded.budgeting_goal,
+                    updated_at = CURRENT_TIMESTAMP
+                """,
+                (
+                    user_id,
+                    month_key,
+                    round(float(monthly_income), 2),
+                    round(float(fixed_expenses), 2),
+                    budgeting_goal,
+                ),
+            )
+
     def save_agent_note(self, user_id: int, note_type: str, content: str) -> None:
         with self._connect() as conn:
             conn.execute(
@@ -375,6 +414,60 @@ class Storage:
             "budgeting_goal": row["budgeting_goal"],
             "updated_at": row["updated_at"],
         }
+
+    def get_monthly_plan(self, user_id: int, month_key: str | None) -> dict[str, Any] | None:
+        if not month_key:
+            return None
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                SELECT month_key, monthly_income, fixed_expenses, budgeting_goal, updated_at
+                FROM monthly_plans
+                WHERE user_id = ? AND month_key = ?
+                """,
+                (user_id, month_key),
+            ).fetchone()
+        if not row:
+            return None
+        return {
+            "month_key": row["month_key"],
+            "month_label": self._month_label(row["month_key"]),
+            "monthly_income": round(float(row["monthly_income"]), 2),
+            "fixed_expenses": round(float(row["fixed_expenses"]), 2),
+            "budgeting_goal": row["budgeting_goal"],
+            "updated_at": row["updated_at"],
+        }
+
+    def list_monthly_plans(self, user_id: int) -> list[dict[str, Any]]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT month_key, monthly_income, fixed_expenses, budgeting_goal, updated_at
+                FROM monthly_plans
+                WHERE user_id = ?
+                ORDER BY month_key DESC
+                """,
+                (user_id,),
+            ).fetchall()
+        plans = []
+        for row in rows:
+            month_label = self._month_label(row["month_key"])
+            plans.append(
+                {
+                    "month_key": row["month_key"],
+                    "month_label": month_label,
+                    "monthly_income": round(float(row["monthly_income"]), 2),
+                    "fixed_expenses": round(float(row["fixed_expenses"]), 2),
+                    "budgeting_goal": row["budgeting_goal"],
+                    "updated_at": row["updated_at"],
+                    "summary": (
+                        f"{month_label}, monthly income of ${float(row['monthly_income']):.2f}, "
+                        f"fixed expenses of ${float(row['fixed_expenses']):.2f}, "
+                        f"goal is to {row['budgeting_goal'] or 'not set'}"
+                    ),
+                }
+            )
+        return plans
 
     def list_agent_notes(self, user_id: int, month_key: str | None = None) -> list[dict[str, Any]]:
         with self._connect() as conn:
@@ -475,6 +568,7 @@ class Storage:
         recurring_expenses = self._recurring_expenses(transactions)
         monthly_recurring_total = round(sum(item["monthly_equivalent"] for item in recurring_expenses), 2)
 
+        monthly_plan = self.get_monthly_plan(user_id, selected_month)
         return {
             "transaction_count": len(selected_transactions),
             "total_spent": total_spent,
@@ -494,7 +588,8 @@ class Storage:
             "messages": self.list_chat_messages(user_id),
             "subscription_decisions": self.list_subscription_decisions(user_id),
             "pending_action": self.get_pending_action(user_id),
-            "financial_profile": self.get_financial_profile(user_id),
+            "financial_profile": monthly_plan or self.get_financial_profile(user_id),
+            "monthly_plan_history": self.list_monthly_plans(user_id),
             "agent_notes": self.list_agent_notes(user_id, selected_month),
             "monthly_summary": self.get_monthly_summary(user_id, selected_month),
         }
