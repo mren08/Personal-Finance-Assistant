@@ -390,6 +390,18 @@ def _build_proactive_chat_message(profile: dict) -> str | None:
     leftover_money = monthly_summary.get("leftover_money")
     if isinstance(leftover_money, (int, float)):
         parts.append(f"For {month_label}, you have ${float(leftover_money):.2f} left after fixed expenses.")
+        if float(leftover_money) >= 250:
+            parts.append(
+                "Have you thought about moving some of that into your IRA or 401(k) instead of letting it disappear into extra spending?"
+            )
+        elif float(leftover_money) > 0:
+            parts.append(
+                "Before that buffer gets spent casually, decide whether it should go toward savings, debt payoff, or retirement."
+            )
+        else:
+            parts.append(
+                "That means the next decision matters: either cut spending, reduce recurring charges, or accept that this month is already upside down."
+            )
 
     if category_breakdown:
         biggest = category_breakdown[0]

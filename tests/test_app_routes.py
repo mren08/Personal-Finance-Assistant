@@ -342,6 +342,7 @@ class AppRouteTests(unittest.TestCase):
         self.assertIn("recurring charges", assistant_message.lower())
         self.assertIn("Dining", assistant_message)
         self.assertIn("Netflix", assistant_message)
+        self.assertTrue("ira" in assistant_message.lower() or "401(k)" in assistant_message.lower() or "401k" in assistant_message.lower())
 
     def test_dashboard_defaults_to_newest_transaction_month_and_can_switch_months(self):
         self.client.post("/signup", data={"email": "demo@example.com", "password": "secret123"})
