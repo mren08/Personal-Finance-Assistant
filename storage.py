@@ -58,6 +58,15 @@ class Storage:
                     created_at TEXT DEFAULT CURRENT_TIMESTAMP
                 );
 
+                CREATE TABLE IF NOT EXISTS user_decisions (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                    entry_type TEXT NOT NULL,
+                    title TEXT NOT NULL,
+                    content TEXT NOT NULL,
+                    created_at TEXT DEFAULT CURRENT_TIMESTAMP
+                );
+
                 CREATE TABLE IF NOT EXISTS pending_actions (
                     user_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
                     action_type TEXT NOT NULL,
@@ -229,6 +238,29 @@ class Storage:
                 """
                 SELECT merchant, decision, created_at
                 FROM subscription_decisions
+                WHERE user_id = ?
+                ORDER BY id DESC
+                """,
+                (user_id,),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def save_user_decision(self, user_id: int, entry_type: str, title: str, content: str) -> None:
+        with self._connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO user_decisions (user_id, entry_type, title, content)
+                VALUES (?, ?, ?, ?)
+                """,
+                (user_id, entry_type, title, content),
+            )
+
+    def list_user_decisions(self, user_id: int) -> list[dict[str, Any]]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT entry_type, title, content, created_at
+                FROM user_decisions
                 WHERE user_id = ?
                 ORDER BY id DESC
                 """,
@@ -587,6 +619,7 @@ class Storage:
             "monthly_recurring_total": monthly_recurring_total,
             "messages": self.list_chat_messages(user_id),
             "subscription_decisions": self.list_subscription_decisions(user_id),
+            "user_decisions": self.list_user_decisions(user_id),
             "pending_action": self.get_pending_action(user_id),
             "financial_profile": monthly_plan or self.get_financial_profile(user_id),
             "monthly_plan_history": self.list_monthly_plans(user_id),

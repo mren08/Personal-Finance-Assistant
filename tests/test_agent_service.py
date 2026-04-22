@@ -183,6 +183,21 @@ class AgentServiceTests(unittest.TestCase):
             ],
         )
 
+    def test_agent_service_compacts_dense_reply_formatting(self):
+        dense_reply = (
+            "A good alternative depends on what you like most about Club Pilates: "
+            "- If you want a similar low-impact strength workout: try YouTube or app-based Pilates classes. "
+            "- If you mainly want structure and accountability: use a cheaper gym plus one class pack. "
+            "- If you want the same core benefits for less money: mat Pilates and yoga are solid swaps. "
+            "The best budget-friendly alternative is at-home Pilates plus one low-cost fitness option."
+        )
+
+        service = AgentService(llm_client=lambda payload: {"reply": dense_reply, "actions": []})
+        result = service.run_chat_turn("what alternatives do i have?", {"subscriptions": []})
+
+        self.assertIn("\n- If you want", result["reply"])
+        self.assertLessEqual(len(result["reply"]), len(dense_reply))
+
     def test_agent_service_returns_safe_default_for_non_mapping_llm_response(self):
         service = AgentService(llm_client=lambda payload: "not-json")
 
@@ -247,6 +262,8 @@ class AgentServiceTests(unittest.TestCase):
 
         self.assertEqual(captured["model"], "gpt-5.4-mini")
         self.assertIn("Behave like a thoughtful, conversational assistant", captured["input"][0]["content"])
+        self.assertIn("Keep replies concise and easy to scan", captured["input"][0]["content"])
+        self.assertIn("ask which city they are in", captured["input"][0]["content"])
         self.assertIn("Latest user message: Should I keep Netflix?", captured["input"][1]["content"])
 
     def test_openai_client_falls_back_to_second_model_when_first_fails(self):

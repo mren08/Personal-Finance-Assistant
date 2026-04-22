@@ -47,6 +47,14 @@ class AppRouteTests(unittest.TestCase):
         self.app = app_module.create_app()
         self.client = self.app.test_client()
 
+    def _signup_and_login(self, follow_redirects: bool = False):
+        self.client.post("/signup", data={"email": "demo@example.com", "password": "secret123"})
+        return self.client.post(
+            "/login",
+            data={"email": "demo@example.com", "password": "secret123"},
+            follow_redirects=follow_redirects,
+        )
+
     def tearDown(self):
         self.temp_dir.cleanup()
         os.environ.pop("APP_DB_PATH", None)
@@ -98,7 +106,7 @@ class AppRouteTests(unittest.TestCase):
         self.assertIn("recommendations", payload)
         self.assertIn("actionable_tips_details", payload)
 
-    def test_signup_logs_user_in_and_shows_dashboard(self):
+    def test_signup_creates_account_but_keeps_user_logged_out(self):
         response = self.client.post(
             "/signup",
             data={"email": "demo@example.com", "password": "secret123"},
@@ -106,11 +114,25 @@ class AppRouteTests(unittest.TestCase):
         )
 
         self.assertEqual(response.status_code, 200)
-        self.assertIn(b"Personal Finance AI Assistant", response.data)
-        self.assertIn(b"AI Chatbot", response.data)
+        self.assertIn(b"Account created. Sign in with the email and password you just set.", response.data)
+        self.assertIn(b"Create account", response.data)
+        self.assertIn(b"Sign in", response.data)
+        self.assertNotIn(b"AI Chatbot", response.data)
+
+    def test_login_shows_error_for_bad_credentials(self):
+        self.client.post("/signup", data={"email": "demo@example.com", "password": "secret123"})
+
+        response = self.client.post(
+            "/login",
+            data={"email": "demo@example.com", "password": "wrongpass"},
+            follow_redirects=True,
+        )
+
+        self.assertEqual(response.status_code, 401)
+        self.assertIn(b"Invalid email or password.", response.data)
 
     def test_upload_persists_transactions_for_logged_in_user(self):
-        self.client.post("/signup", data={"email": "demo@example.com", "password": "secret123"})
+        self._signup_and_login()
 
         response = self.client.post(
             "/api/upload-statement",
@@ -125,7 +147,7 @@ class AppRouteTests(unittest.TestCase):
         self.assertEqual(payload["profile"]["transaction_count"], 2)
 
     def test_chat_endpoint_saves_manual_transaction_action(self):
-        self.client.post("/signup", data={"email": "demo@example.com", "password": "secret123"})
+        self._signup_and_login()
 
         response = self.client.post(
             "/api/chat",
@@ -139,7 +161,7 @@ class AppRouteTests(unittest.TestCase):
         self.assertGreaterEqual(payload["profile"]["transaction_count"], 1)
 
     def test_chat_endpoint_asks_before_adding_possible_duplicate_transaction(self):
-        self.client.post("/signup", data={"email": "demo@example.com", "password": "secret123"})
+        self._signup_and_login()
         self.client.post(
             "/api/upload-statement",
             data={"statement": (io.BytesIO("""Transaction Date,Description,Category,Amount
@@ -159,7 +181,7 @@ class AppRouteTests(unittest.TestCase):
         self.assertEqual(payload["profile"]["transaction_count"], 1)
 
     def test_profile_update_route_saves_income_and_fixed_expenses(self):
-        self.client.post("/signup", data={"email": "demo@example.com", "password": "secret123"})
+        self._signup_and_login()
 
         response = self.client.post(
             "/api/profile",
@@ -182,7 +204,7 @@ class AppRouteTests(unittest.TestCase):
         )
 
     def test_monthly_plan_saves_month_scoped_entry_and_can_be_edited(self):
-        self.client.post("/signup", data={"email": "demo@example.com", "password": "secret123"})
+        self._signup_and_login()
         self.client.post(
             "/api/upload-statement",
             data={"statement": (io.BytesIO(MULTI_MONTH_CSV.encode("utf-8")), "statement.csv")},
@@ -242,7 +264,7 @@ class AppRouteTests(unittest.TestCase):
         self.assertIn("April 2026, monthly income of $3200.00, fixed expenses of $550.00", april_entry["summary"])
 
     def test_chat_route_persists_agent_note_from_llm_result(self):
-        self.client.post("/signup", data={"email": "demo@example.com", "password": "secret123"})
+        self._signup_and_login()
         self.client.post(
             "/api/profile",
             json={
@@ -278,7 +300,7 @@ class AppRouteTests(unittest.TestCase):
         )
 
     def test_chat_route_falls_back_to_local_coaching_when_openai_reply_is_generic_failure(self):
-        self.client.post("/signup", data={"email": "demo@example.com", "password": "secret123"})
+        self._signup_and_login()
         self.client.post(
             "/api/profile",
             json={
@@ -312,7 +334,7 @@ class AppRouteTests(unittest.TestCase):
         self.assertIn("Netflix", payload["reply"])
 
     def test_upload_generates_proactive_ai_chatbot_message_with_recurring_and_category_context(self):
-        self.client.post("/signup", data={"email": "demo@example.com", "password": "secret123"})
+        self._signup_and_login()
         self.client.post(
             "/api/profile",
             json={
@@ -345,7 +367,7 @@ class AppRouteTests(unittest.TestCase):
         self.assertTrue("ira" in assistant_message.lower() or "401(k)" in assistant_message.lower() or "401k" in assistant_message.lower())
 
     def test_dashboard_defaults_to_newest_transaction_month_and_can_switch_months(self):
-        self.client.post("/signup", data={"email": "demo@example.com", "password": "secret123"})
+        self._signup_and_login()
         self.client.post(
             "/api/profile",
             json={
@@ -374,7 +396,7 @@ class AppRouteTests(unittest.TestCase):
         self.assertIn(b"$1900.00", march_response.data)
 
     def test_ai_chatbot_can_handle_subscription_cut_request_for_detected_recurring_charge(self):
-        self.client.post("/signup", data={"email": "demo@example.com", "password": "secret123"})
+        self._signup_and_login()
         self.client.post(
             "/api/profile",
             json={
@@ -404,9 +426,36 @@ class AppRouteTests(unittest.TestCase):
             "PILATES CLUB",
             [decision["merchant"] for decision in payload["profile"]["subscription_decisions"]],
         )
+        self.assertTrue(payload["profile"]["user_decisions"])
+
+    def test_ai_chatbot_can_save_user_decision_note_from_chat(self):
+        self._signup_and_login()
+        pilates_csv = """Transaction Date,Description,Category,Amount
+09/01/2025,CLR*ClubPilate7187010242,Wellness,-107.88
+10/01/2025,CLR*ClubPilate7187010242,Wellness,-107.88
+11/01/2025,CLR*ClubPilate7187010242,Wellness,-107.88
+"""
+        self.client.post(
+            "/api/upload-statement",
+            data={"statement": (io.BytesIO(pilates_csv.encode("utf-8")), "statement.csv")},
+            content_type="multipart/form-data",
+        )
+
+        response = self.client.post(
+            "/api/chat",
+            json={"message": "Okay I'm switching my workout class out to yoga instead."},
+        )
+        payload = response.get_json()
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("logged", payload["reply"].lower())
+        self.assertEqual(payload["action"]["type"], "save_user_decision")
+        self.assertTrue(payload["profile"]["user_decisions"])
+        self.assertIn("Workout swap", payload["profile"]["user_decisions"][0]["title"])
+        self.assertIn("yoga", payload["profile"]["user_decisions"][0]["content"].lower())
 
     def test_ai_chatbot_can_answer_follow_up_about_called_out_subscription(self):
-        self.client.post("/signup", data={"email": "demo@example.com", "password": "secret123"})
+        self._signup_and_login()
         self.client.post(
             "/api/profile",
             json={
@@ -434,19 +483,21 @@ class AppRouteTests(unittest.TestCase):
         self.assertTrue("keep" in payload["reply"].lower() or "cut" in payload["reply"].lower())
 
     def test_ai_chatbot_can_add_generic_spend_without_merchant_name(self):
-        self.client.post("/signup", data={"email": "demo@example.com", "password": "secret123"})
+        self._signup_and_login()
 
         response = self.client.post("/api/chat", json={"message": "I spent $40"})
         payload = response.get_json()
 
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(payload["action"]["type"], "add_transaction")
-        self.assertEqual(payload["profile"]["transaction_count"], 1)
-        self.assertEqual(payload["profile"]["recent_transactions"][0]["description"], "Manual expense")
-        self.assertEqual(payload["profile"]["recent_transactions"][0]["amount"], 40.0)
+        self.assertEqual(payload["action"]["type"], "none")
+        self.assertEqual(payload["profile"]["transaction_count"], 0)
+        self.assertIn("where", payload["reply"].lower())
+        self.assertIn("when", payload["reply"].lower())
+        self.assertIn("how", payload["reply"].lower())
+        self.assertIn("already counted", payload["reply"].lower())
 
     def test_ai_chatbot_can_give_grounded_advice_from_saved_context(self):
-        self.client.post("/signup", data={"email": "demo@example.com", "password": "secret123"})
+        self._signup_and_login()
         self.client.post(
             "/api/profile",
             json={
@@ -474,9 +525,47 @@ class AppRouteTests(unittest.TestCase):
         self.assertIn("Dining", payload["reply"])
         self.assertIn("Netflix", payload["reply"])
         self.assertIn("Spend less on dining", payload["reply"])
+        self.assertIn("Focus:", payload["reply"])
+        self.assertIn("Next cut:", payload["reply"])
+        self.assertIn("Action:", payload["reply"])
+
+    def test_ai_chatbot_can_build_a_tight_plan_from_saved_context(self):
+        self._signup_and_login()
+        self.client.post(
+            "/api/profile",
+            json={
+                "monthly_income": 1000,
+                "fixed_expenses": 500,
+                "budgeting_goal": "Save 200 for a trip",
+            },
+        )
+        recurring_csv = """Transaction Date,Description,Category,Amount
+02/03/2026,NETFLIX.COM,Subscriptions,-15.49
+03/03/2026,NETFLIX.COM,Subscriptions,-15.49
+04/03/2026,NETFLIX.COM,Subscriptions,-15.49
+04/06/2026,Restaurant Row,Dining,-220.00
+04/07/2026,Grocer,Groceries,-90.00
+"""
+        self.client.post(
+            "/api/upload-statement",
+            data={"statement": (io.BytesIO(recurring_csv.encode("utf-8")), "statement.csv")},
+            content_type="multipart/form-data",
+        )
+
+        response = self.client.post("/api/chat", json={"message": "help me build a tight plan"})
+        payload = response.get_json()
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("Tight plan for", payload["reply"])
+        self.assertIn("1.", payload["reply"])
+        self.assertIn("2.", payload["reply"])
+        self.assertIn("3.", payload["reply"])
+        self.assertIn("Dining", payload["reply"])
+        self.assertIn("Netflix", payload["reply"])
+        self.assertIn("Save 200 for a trip", payload["reply"])
 
     def test_ai_chatbot_answers_monthly_gas_average_from_uploaded_history(self):
-        self.client.post("/signup", data={"email": "demo@example.com", "password": "secret123"})
+        self._signup_and_login()
         self.client.post(
             "/api/upload-statement",
             data={"statement": (io.BytesIO(GAS_AND_MEMBERSHIP_CSV.encode("utf-8")), "statement.csv")},
@@ -491,7 +580,7 @@ class AppRouteTests(unittest.TestCase):
         self.assertNotIn("main focus", payload["reply"].lower())
 
     def test_ai_chatbot_identifies_biggest_food_and_drink_merchant_for_named_month(self):
-        self.client.post("/signup", data={"email": "demo@example.com", "password": "secret123"})
+        self._signup_and_login()
         self.client.post(
             "/api/upload-statement",
             data={"statement": (io.BytesIO(OCT_NOV_FOOD_CSV.encode("utf-8")), "statement.csv")},
@@ -509,8 +598,63 @@ class AppRouteTests(unittest.TestCase):
         self.assertIn("Joe's Pizza", payload["reply"])
         self.assertIn("$60.50", payload["reply"])
 
+    def test_ai_chatbot_subscription_alternatives_first_ask_for_city(self):
+        self._signup_and_login()
+        pilates_csv = """Transaction Date,Description,Category,Amount
+09/01/2025,CLR*ClubPilate7187010242,Wellness,-107.88
+10/01/2025,CLR*ClubPilate7187010242,Wellness,-107.88
+11/01/2025,CLR*ClubPilate7187010242,Wellness,-107.88
+"""
+        self.client.post(
+            "/api/upload-statement",
+            data={"statement": (io.BytesIO(pilates_csv.encode("utf-8")), "statement.csv")},
+            content_type="multipart/form-data",
+        )
+
+        response = self.client.post(
+            "/api/chat",
+            json={"message": "what alternatives do i have to club pilates"},
+        )
+        payload = response.get_json()
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("which city you are in", payload["reply"].lower())
+        self.assertIn("yoga", payload["reply"].lower())
+        self.assertIn("community rec", payload["reply"].lower())
+
+    def test_ai_chatbot_subscription_alternatives_use_city_follow_up(self):
+        self._signup_and_login()
+        pilates_csv = """Transaction Date,Description,Category,Amount
+09/01/2025,CLR*ClubPilate7187010242,Wellness,-107.88
+10/01/2025,CLR*ClubPilate7187010242,Wellness,-107.88
+11/01/2025,CLR*ClubPilate7187010242,Wellness,-107.88
+"""
+        self.client.post(
+            "/api/upload-statement",
+            data={"statement": (io.BytesIO(pilates_csv.encode("utf-8")), "statement.csv")},
+            content_type="multipart/form-data",
+        )
+
+        self.client.post(
+            "/api/chat",
+            json={"message": "what alternatives do i have to club pilates"},
+        )
+        response = self.client.post(
+            "/api/chat",
+            json={"message": "Boston"},
+        )
+        payload = response.get_json()
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("Boston", payload["reply"])
+        self.assertIn("\n1.", payload["reply"])
+        self.assertIn("\n2.", payload["reply"])
+        self.assertIn("\n3.", payload["reply"])
+        self.assertIn("yoga", payload["reply"].lower())
+        self.assertIn("ymca", payload["reply"].lower())
+
     def test_gas_station_repeat_charges_are_not_treated_as_recurring_subscriptions(self):
-        self.client.post("/signup", data={"email": "demo@example.com", "password": "secret123"})
+        self._signup_and_login()
         response = self.client.post(
             "/api/upload-statement",
             data={"statement": (io.BytesIO(GAS_AND_MEMBERSHIP_CSV.encode("utf-8")), "statement.csv")},
@@ -525,11 +669,7 @@ class AppRouteTests(unittest.TestCase):
         self.assertNotIn("BP#34122123010 OCEAN BP", merchants)
 
     def test_logged_in_dashboard_shows_income_and_leftover_money_sections(self):
-        self.client.post(
-            "/signup",
-            data={"email": "demo@example.com", "password": "secret123"},
-            follow_redirects=True,
-        )
+        self._signup_and_login(follow_redirects=True)
 
         response = self.client.get("/")
 
@@ -542,6 +682,9 @@ class AppRouteTests(unittest.TestCase):
         self.assertIn(b"category-donut-chart", response.data)
         self.assertIn(b"month-selector", response.data)
         self.assertIn(b"transactions-category-filter", response.data)
+        self.assertIn(b"User decisions & notes", response.data)
+        self.assertIn(b"messages-toggle", response.data)
+        self.assertIn(b"messages-jump-bottom", response.data)
         self.assertIn(b"data-tooltip=", response.data)
         self.assertIn(b"chart-tooltip", response.data)
 

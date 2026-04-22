@@ -52,6 +52,16 @@ class OverspendingCoach:
                 },
             }
 
+        decision_note = self._user_decision_note(clean_message, profile)
+        if decision_note:
+            return decision_note
+
+        if self._looks_like_incomplete_manual_spend(clean_message):
+            return {
+                "reply": "I can log that, but first tell me where it happened, when it happened, and how it happened so I can make sure it was not already counted in your statements.",
+                "action": {"type": "none"},
+            }
+
         transaction = self._manual_transaction(clean_message)
         if transaction:
             merchant = transaction["description"]
@@ -131,8 +141,6 @@ class OverspendingCoach:
         if not amount_match:
             return None
 
-        if merchant is None and re.search(r"\b(spent|paid|bought)\b", message, re.IGNORECASE):
-            merchant = "Manual expense"
         if not merchant:
             return None
 
@@ -147,6 +155,44 @@ class OverspendingCoach:
             "amount": amount,
             "category": category,
             "source": "chat_manual",
+        }
+
+    def _user_decision_note(self, message: str, profile: dict[str, Any]) -> dict[str, Any] | None:
+        lowered = message.lower()
+        if not any(token in lowered for token in {"switch", "swapping", "switched", "instead", "going with"}):
+            return None
+        if not any(token in lowered for token in {"class", "membership", "subscription", "workout", "gym", "pilates", "yoga"}):
+            return None
+
+        replacement_match = re.search(
+            r"(?:to|with|for)\s+([A-Za-z][A-Za-z0-9 '&+-]+?)(?:\s+instead|[.!?]|$)",
+            message,
+            re.IGNORECASE,
+        )
+        replacement = replacement_match.group(1).strip().rstrip(".") if replacement_match else "a lower-cost option"
+
+        subscriptions = profile.get("subscriptions") or []
+        current_name = None
+        for subscription in subscriptions:
+            merchant = str(subscription.get("merchant") or "")
+            merchant_tokens = self._normalized(merchant)
+            if merchant_tokens and merchant_tokens.intersection(self._normalized(lowered)):
+                current_name = self._display_merchant(merchant)
+                break
+        if current_name is None and "pilates" in lowered:
+            current_name = "Club Pilates"
+        if current_name is None:
+            current_name = "current membership"
+
+        content = f"Switched from {current_name} to {replacement}."
+        return {
+            "reply": f"Logged. I saved that decision: {content}",
+            "action": {
+                "type": "save_user_decision",
+                "entry_type": "decision",
+                "title": "Workout swap",
+                "content": content,
+            },
         }
 
     @staticmethod
@@ -188,3 +234,10 @@ class OverspendingCoach:
     @staticmethod
     def _is_positive_confirmation(lower_message: str) -> bool:
         return lower_message.startswith("yes") or "already included" in lower_message or "already in" in lower_message
+
+    @staticmethod
+    def _looks_like_incomplete_manual_spend(message: str) -> bool:
+        has_amount = re.search(r"\$?\d+(?:\.\d{1,2})?", message)
+        has_spend_verb = re.search(r"\b(spent|paid|bought)\b", message, re.IGNORECASE)
+        has_merchant_hint = re.search(r"\b(at|for)\s+[A-Za-z]", message, re.IGNORECASE)
+        return bool(has_amount and has_spend_verb and not has_merchant_hint)

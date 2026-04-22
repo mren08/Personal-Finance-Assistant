@@ -152,6 +152,25 @@ class StorageTests(unittest.TestCase):
             self.assertEqual(messages[0]["role"], "user")
             self.assertIn("Pick one", messages[1]["content"])
 
+    def test_storage_saves_user_decision_notes(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            storage = Storage(f"{tmpdir}/app.db")
+
+            user_id = storage.create_user("michelle@example.com", "secret123")
+            storage.save_user_decision(
+                user_id,
+                entry_type="decision",
+                title="Workout swap",
+                content="Switched from Club Pilates to yoga classes.",
+            )
+
+            decisions = storage.list_user_decisions(user_id)
+
+            self.assertEqual(len(decisions), 1)
+            self.assertEqual(decisions[0]["entry_type"], "decision")
+            self.assertEqual(decisions[0]["title"], "Workout swap")
+            self.assertIn("yoga classes", decisions[0]["content"])
+
 
 class CoachTests(unittest.TestCase):
     def test_chat_message_asks_for_confirmation_when_existing_match_is_uncertain(self):
@@ -191,6 +210,20 @@ class CoachTests(unittest.TestCase):
         self.assertEqual(result["action"]["transaction"]["category"], "Dining")
         self.assertIn("Howoo", result["reply"])
 
+    def test_chat_message_asks_for_where_and_when_if_manual_spend_lacks_details(self):
+        coach = OverspendingCoach()
+
+        result = coach.process_message(
+            "I spent $40",
+            profile={"subscriptions": [], "category_totals": {}, "transactions": [], "pending_action": None},
+        )
+
+        self.assertEqual(result["action"]["type"], "none")
+        self.assertIn("where", result["reply"].lower())
+        self.assertIn("when", result["reply"].lower())
+        self.assertIn("how", result["reply"].lower())
+        self.assertIn("already counted", result["reply"].lower())
+
     def test_chat_message_can_mark_subscription_to_cancel(self):
         coach = OverspendingCoach()
 
@@ -227,6 +260,19 @@ class CoachTests(unittest.TestCase):
 
         self.assertEqual(result["action"]["type"], "add_transaction")
         self.assertIn("adding it now", result["reply"].lower())
+
+    def test_chat_message_can_save_user_decision_note(self):
+        coach = OverspendingCoach()
+
+        result = coach.process_message(
+            "Okay I'm switching my workout class out to yoga instead.",
+            profile={"subscriptions": [{"merchant": "CLR*ClubPilate7187010242", "monthly_equivalent": 107.88}]},
+        )
+
+        self.assertEqual(result["action"]["type"], "save_user_decision")
+        self.assertEqual(result["action"]["entry_type"], "decision")
+        self.assertIn("Workout swap", result["action"]["title"])
+        self.assertIn("yoga", result["action"]["content"].lower())
 
 
 if __name__ == "__main__":

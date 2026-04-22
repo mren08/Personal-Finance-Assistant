@@ -15,6 +15,11 @@ Your job:
 - be specific about the selected month when relevant
 - give practical advice, tradeoffs, and a recommendation when the user asks what they should do
 - suggest or emit structured actions when the user is clearly asking to save data or update the account
+- Keep replies concise and easy to scan
+- Prefer 2-5 short lines instead of dense paragraphs
+- If listing options or advice, use short numbered lines
+- Avoid long disclaimers or repeating the full context back to the user
+- If the user asks for local alternatives and location matters, ask which city they are in before giving recommendations
 
 Action rules:
 - only emit actions from the allowed_action_types list
@@ -29,6 +34,23 @@ Response format:
   - "reply": string
   - "actions": array
 """.strip()
+
+
+def _format_reply_text(reply: str) -> str:
+    text = " ".join(str(reply or "").strip().split())
+    if not text:
+        return ""
+
+    text = re.sub(r"\s+-\s+(?=[A-Z])", "\n- ", text)
+    text = re.sub(r"\s+(\d+\.)\s+", r"\n\1 ", text)
+
+    if "\n" not in text and len(text) > 260:
+        sentences = [part.strip() for part in re.split(r"(?<=[.!?])\s+", text) if part.strip()]
+        if len(sentences) > 1:
+            text = "\n".join(sentences[:5])
+
+    text = re.sub(r"\n{3,}", "\n\n", text)
+    return text.strip()
 
 
 def _summarize_context(payload: dict) -> str:
@@ -139,6 +161,7 @@ class AgentService:
         "update_goal",
         "mark_subscription_cancel",
         "mark_subscription_keep",
+        "save_user_decision",
         "save_agent_note",
     )
 
@@ -160,7 +183,7 @@ class AgentService:
             return {"reply": FALLBACK_REPLY, "actions": []}
 
         return {
-            "reply": str(response.get("reply", "")).strip() or FALLBACK_REPLY,
+            "reply": _format_reply_text(str(response.get("reply", "")).strip()) or FALLBACK_REPLY,
             "actions": self._normalize_actions(response.get("actions", [])),
         }
 
@@ -197,6 +220,19 @@ class AgentService:
             return {
                 "type": action_type,
                 "note_type": note_type,
+                "content": content,
+            }
+
+        if action_type == "save_user_decision":
+            entry_type = str(action.get("entry_type", "")).strip() or "decision"
+            title = str(action.get("title", "")).strip()
+            content = str(action.get("content", "")).strip()
+            if not title or not content:
+                return None
+            return {
+                "type": action_type,
+                "entry_type": entry_type,
+                "title": title,
                 "content": content,
             }
 

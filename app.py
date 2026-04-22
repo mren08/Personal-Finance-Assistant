@@ -20,7 +20,8 @@ from storage import Storage
 
 class _FallbackAgentClient:
     def __call__(self, payload: dict) -> dict:
-        message = str(payload.get("message") or "").strip().lower()
+        raw_message = str(payload.get("message") or "").strip()
+        message = raw_message.lower()
         context = payload.get("context", {})
         monthly_summary = context.get("monthly_summary") or {}
         financial_profile = context.get("financial_profile") or {}
@@ -36,6 +37,8 @@ class _FallbackAgentClient:
         biggest = category_breakdown[0] if category_breakdown else None
         strongest_subscription = subscriptions[0] if subscriptions else None
         referenced_subscription = _resolve_referenced_subscription(message, context)
+        city = _extract_city_from_conversation(raw_message, context)
+        alternative_follow_up = _is_subscription_alternative_follow_up(raw_message, context)
         note_content = str(notes[0]["content"]).strip() if notes else ""
         merchant_reply = _merchant_rank_reply(message, context)
         topic_reply = _category_topic_reply(message, context)
@@ -44,12 +47,30 @@ class _FallbackAgentClient:
             reply = merchant_reply
         elif topic_reply:
             reply = topic_reply
+        elif referenced_subscription and (
+            any(token in message for token in {"alternative", "alternatives", "instead", "swap", "replace"})
+            or alternative_follow_up
+        ):
+            reply = self._subscription_alternative_reply(
+                referenced_subscription,
+                month_label=month_label,
+                city=city,
+            )
         elif referenced_subscription and any(token in message for token in {"should i keep", "keep it", "cancel it", "should i cancel"}):
             reply = self._subscription_recommendation(
                 referenced_subscription,
                 month_label=month_label,
                 leftover_money=leftover_money,
                 biggest=biggest,
+                goal=goal,
+            )
+        elif "tight plan" in message or "build a plan" in message:
+            reply = self._tight_plan_reply(
+                month_label=month_label,
+                leftover_money=leftover_money,
+                biggest=biggest,
+                recurring_total=recurring_total,
+                strongest_subscription=strongest_subscription,
                 goal=goal,
             )
         elif any(token in message for token in {"help", "advice", "suggest", "should i", "what should", "how do i", "plan"}):
@@ -110,32 +131,99 @@ class _FallbackAgentClient:
         goal: str,
         note_content: str,
     ) -> str:
-        parts = []
+        lines = [f"For {month_label}:"]
         if biggest:
-            parts.append(
-                f"In {month_label}, your biggest category is {biggest['category']} at "
-                f"${biggest['amount']:.2f} ({biggest['percentage']:.2f}% of tracked spending)."
+            lines.append(
+                f"Focus: {biggest['category']} is highest at ${biggest['amount']:.2f} ({biggest['percentage']:.2f}%)."
             )
         if strongest_subscription:
             display_name = _display_merchant(str(strongest_subscription.get("merchant") or ""))
-            parts.append(
-                f"Your clearest recurring cut is {display_name} at "
-                f"${float(strongest_subscription.get('monthly_equivalent') or 0):.2f} per month."
+            lines.append(
+                f"Next cut: {display_name} costs about ${float(strongest_subscription.get('monthly_equivalent') or 0):.2f}/month."
             )
         elif recurring_total > 0:
-            parts.append(f"Recurring charges are still costing you ${recurring_total:.2f} per month.")
+            lines.append(f"Next cut: recurring charges are still costing ${recurring_total:.2f}/month.")
         if isinstance(leftover_money, (int, float)):
             if float(leftover_money) < 0:
-                parts.append(f"You are currently ${abs(float(leftover_money)):.2f} over in {month_label} after fixed expenses.")
+                lines.append(f"Reality: you are ${abs(float(leftover_money)):.2f} over after fixed expenses.")
+                lines.append("Action: freeze discretionary spending for a few days and cut the biggest leak first.")
             else:
-                parts.append(f"You still have ${float(leftover_money):.2f} left in {month_label} after fixed expenses.")
+                lines.append(f"Reality: you have ${float(leftover_money):.2f} left after fixed expenses.")
+                lines.append("Action: decide now whether that money goes to savings, debt payoff, or retirement before it disappears.")
         if goal:
-            parts.append(f"Your stated goal is {goal}.")
+            lines.append(f"Goal: {goal}.")
         if note_content:
-            parts.append(f"Current focus: {note_content}")
-        if not parts:
+            lines.append(f"Note: {note_content}")
+        if len(lines) == 1:
             return "Give me a concrete question about your spending, subscriptions, or monthly plan and I will answer from your saved data."
-        return " ".join(parts)
+        return "\n".join(lines)
+
+    @staticmethod
+    def _subscription_alternative_reply(subscription: dict, month_label: str, city: str | None) -> str:
+        display_name = _display_merchant(str(subscription.get("merchant") or "that subscription"))
+        monthly_cost = float(subscription.get("monthly_equivalent") or 0)
+        category = str(subscription.get("category") or "").lower()
+
+        if not city:
+            return (
+                f"If you want cheaper alternatives to {display_name}, tell me which city you are in. "
+                "Then I can narrow this to lower-cost options like yoga, gym classes, community rec programs, or ClassPass-style options in the right area."
+            )
+
+        lines = [f"Cheaper options than {display_name} in {city}:"]
+        if "wellness" in category or "fitness" in category or "health" in category:
+            lines.append("1. Check yoga and mat Pilates studios first. They are often meaningfully cheaper than boutique reformer memberships.")
+            lines.append("2. Check YMCA, community rec, or basic gym class schedules for lower-cost weekly classes.")
+            lines.append("3. Check ClassPass-style options or intro packs if you want variety without another full membership.")
+        else:
+            lines.append("1. Check lower-cost local options that give you the same benefit first.")
+            lines.append("2. Check whether a lighter plan or class pack works instead of a full membership.")
+            lines.append("3. Check flexible pay-as-you-go options before committing to another recurring bill.")
+        lines.append(f"Cost: {display_name} is about ${monthly_cost:.2f}/month right now.")
+        lines.append("Next: tell me whether you want cheapest, closest match, or best value, and I will narrow it further.")
+        return "\n".join(lines)
+
+    @staticmethod
+    def _tight_plan_reply(
+        month_label: str,
+        leftover_money,
+        biggest: dict | None,
+        recurring_total: float,
+        strongest_subscription: dict | None,
+        goal: str,
+    ) -> str:
+        lines = [f"Tight plan for {month_label}:"]
+        if biggest:
+            lines.append(
+                f"1. Cap {biggest['category']} now. It is your biggest leak at ${biggest['amount']:.2f} ({biggest['percentage']:.2f}%)."
+            )
+        else:
+            lines.append("1. Cut all non-essential spending until the month is back under control.")
+
+        if strongest_subscription:
+            display_name = _display_merchant(str(strongest_subscription.get("merchant") or "that subscription"))
+            monthly_cost = float(strongest_subscription.get("monthly_equivalent") or 0)
+            lines.append(f"2. Review {display_name}. It is costing about ${monthly_cost:.2f}/month and is an easy place to pause.")
+        elif recurring_total > 0:
+            lines.append(f"2. Review recurring charges. They are still costing ${recurring_total:.2f}/month.")
+        else:
+            lines.append("2. Keep the next few days to essentials only: groceries, transport, and true bills.")
+
+        if isinstance(leftover_money, (int, float)):
+            if float(leftover_money) < 0:
+                lines.append(
+                    f"3. You are ${abs(float(leftover_money)):.2f} over after fixed expenses, so every new non-essential purchase makes the hole deeper."
+                )
+            else:
+                lines.append(
+                    f"3. You still have ${float(leftover_money):.2f} left after fixed expenses, so assign it before it disappears."
+                )
+        else:
+            lines.append("3. Set a hard spending rule for the rest of the month and check every purchase against it.")
+
+        if goal:
+            lines.append(f"Goal: protect progress toward {goal}.")
+        return "\n".join(lines)
 
     @staticmethod
     def _subscription_recommendation(
@@ -350,6 +438,44 @@ def _resolve_referenced_subscription(message: str, context: dict) -> dict | None
     return subscriptions[0] if len(subscriptions) == 1 else None
 
 
+def _extract_city_from_conversation(message: str, context: dict) -> str | None:
+    raw = str(message or "").strip()
+    lowered = raw.lower()
+    patterns = [
+        r"(?:i am|i'm|im)\s+in\s+([a-z][a-z .'-]{1,40})$",
+        r"live in\s+([a-z][a-z .'-]{1,40})$",
+        r"based in\s+([a-z][a-z .'-]{1,40})$",
+        r"\bin\s+([a-z][a-z .'-]{1,40})$",
+    ]
+    for pattern in patterns:
+        match = re.search(pattern, lowered)
+        if match:
+            return match.group(1).strip(" .,-").title()
+
+    recent_messages = list(context.get("messages") or [])[-4:]
+    asked_for_city = any(
+        message_row.get("role") == "assistant" and "which city" in str(message_row.get("content") or "").lower()
+        for message_row in recent_messages
+    )
+    if asked_for_city and re.fullmatch(r"[A-Za-z][A-Za-z .'-]{1,40}", raw):
+        return raw.strip(" .,-").title()
+    return None
+
+
+def _is_subscription_alternative_follow_up(message: str, context: dict) -> bool:
+    lowered = str(message or "").lower()
+    if any(token in lowered for token in {"alternative", "alternatives", "instead", "swap", "replace"}):
+        return True
+
+    recent_messages = list(context.get("messages") or [])[-4:]
+    return any(
+        message_row.get("role") == "assistant"
+        and "cheaper alternatives" in str(message_row.get("content") or "").lower()
+        and "which city" in str(message_row.get("content") or "").lower()
+        for message_row in recent_messages
+    )
+
+
 def _build_month_focus_note(profile: dict, summary: dict) -> str:
     month_label = profile.get("selected_month_label") or _month_label(profile.get("selected_month"))
     segments = [
@@ -451,6 +577,16 @@ def _recover_agent_result(message: str, profile: dict, agent_result: dict) -> di
     if agent_result.get("reply") != FALLBACK_REPLY or agent_result.get("actions"):
         return agent_result
     return AgentService(llm_client=_FallbackAgentClient()).run_chat_turn(message=message, agent_context=profile)
+
+
+def _should_prefer_heuristic_reply(heuristic_result: dict) -> bool:
+    reply = str(heuristic_result.get("reply") or "").lower()
+    return (
+        "where" in reply
+        and "when" in reply
+        and "how" in reply
+        and "already counted" in reply
+    )
 
 def _parse_float(form, field: str, default: float = 0.0) -> float:
     raw = form.get(field, str(default)).strip()
@@ -709,9 +845,28 @@ def create_app() -> Flask:
             elif action_type == "mark_subscription_cancel":
                 storage.clear_pending_action(user_id)
                 storage.save_subscription_decision(user_id, action["merchant"], "cancel")
+                storage.save_user_decision(
+                    user_id,
+                    entry_type="subscription",
+                    title="Subscription decision",
+                    content=f"Marked {action['merchant']} as cancel.",
+                )
             elif action_type == "mark_subscription_keep":
                 storage.clear_pending_action(user_id)
                 storage.save_subscription_decision(user_id, action["merchant"], "keep")
+                storage.save_user_decision(
+                    user_id,
+                    entry_type="subscription",
+                    title="Subscription decision",
+                    content=f"Marked {action['merchant']} as keep.",
+                )
+            elif action_type == "save_user_decision":
+                storage.save_user_decision(
+                    user_id,
+                    entry_type=str(action.get("entry_type") or "decision"),
+                    title=str(action.get("title") or "User decision"),
+                    content=str(action.get("content") or ""),
+                )
             elif action_type == "confirm_transaction_match":
                 storage.set_pending_action(
                     user_id,
@@ -750,6 +905,8 @@ def create_app() -> Flask:
             logged_in=profile is not None,
             user=user,
             profile=profile,
+            auth_notice=session.pop("auth_notice", None),
+            auth_error=session.pop("auth_error", None),
         )
 
     @app.route("/healthz")
@@ -761,11 +918,21 @@ def create_app() -> Flask:
         email = request.form.get("email", "").strip()
         password = request.form.get("password", "")
         try:
-            user_id = get_storage().create_user(email, password)
+            get_storage().create_user(email, password)
         except ValueError as exc:
-            return str(exc), 400
-        session["user_id"] = user_id
-        session.pop("selected_month", None)
+            return (
+                render_template(
+                    "index.html",
+                    default_budget_caps=BudgetRecommender.default_target_max_ratio(),
+                    logged_in=False,
+                    user=None,
+                    profile=None,
+                    auth_notice=None,
+                    auth_error=str(exc),
+                ),
+                400,
+            )
+        session["auth_notice"] = "Account created. Sign in with the email and password you just set."
         return redirect(url_for("index"))
 
     @app.route("/login", methods=["POST"])
@@ -774,7 +941,18 @@ def create_app() -> Flask:
         password = request.form.get("password", "")
         user_id = get_storage().authenticate_user(email, password)
         if user_id is None:
-            return "Invalid email or password.", 401
+            return (
+                render_template(
+                    "index.html",
+                    default_budget_caps=BudgetRecommender.default_target_max_ratio(),
+                    logged_in=False,
+                    user=None,
+                    profile=None,
+                    auth_notice=None,
+                    auth_error="Invalid email or password.",
+                ),
+                401,
+            )
         session["user_id"] = user_id
         session.pop("selected_month", None)
         return redirect(url_for("index"))
@@ -981,7 +1159,11 @@ def create_app() -> Flask:
         monthly_focus_content = _extract_monthly_focus_content(agent_result["actions"])
         apply_agent_actions(user_id, agent_result["actions"])
 
-        reply = heuristic_result["reply"] if action["type"] != "none" else (agent_result["reply"] or heuristic_result["reply"])
+        reply = (
+            heuristic_result["reply"]
+            if action["type"] != "none" or _should_prefer_heuristic_reply(heuristic_result)
+            else (agent_result["reply"] or heuristic_result["reply"])
+        )
         storage.add_chat_message(user_id, "user", message)
         storage.add_chat_message(user_id, "assistant", reply)
 

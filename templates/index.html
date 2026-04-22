@@ -136,6 +136,33 @@
       color: var(--muted);
       font-size: 0.94rem;
     }
+    .auth-feedback {
+      border-radius: 14px;
+      padding: 12px 14px;
+      margin-bottom: 14px;
+      font-size: 0.92rem;
+    }
+    .auth-feedback.notice {
+      background: #efe7db;
+      color: var(--ink);
+    }
+    .auth-feedback.error {
+      background: #f7dfda;
+      color: #7d281f;
+    }
+    .inline-actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      margin: 10px 0 12px;
+    }
+    .inline-actions[hidden] {
+      display: none;
+    }
+    .inline-actions button {
+      width: auto;
+      padding: 10px 14px;
+    }
     .dashboard {
       display: grid;
       grid-template-columns: 1.1fr 0.9fr;
@@ -302,6 +329,11 @@
       display: grid;
       gap: 6px;
     }
+    .messages {
+      max-height: 540px;
+      overflow-y: auto;
+      padding-right: 4px;
+    }
     .row {
       display: flex;
       justify-content: space-between;
@@ -360,6 +392,12 @@
         <div class="auth-card">
           <h2>Start tracking</h2>
           <p>Create an account, upload a statement, then use the chatbox to add missing spend, review subscriptions, and get personalized budgeting guidance based on your spending history.</p>
+          {% if auth_notice %}
+            <div class="auth-feedback notice">{{ auth_notice }}</div>
+          {% endif %}
+          {% if auth_error %}
+            <div class="auth-feedback error">{{ auth_error }}</div>
+          {% endif %}
           <form class="form-stack" method="post" action="/signup">
             <div>
               <label for="signup-email">Email</label>
@@ -426,8 +464,8 @@
                 <div class="value" id="recurring-total">${{ '%.2f'|format(profile.monthly_recurring_total or 0) }}</div>
               </div>
               <div class="metric">
-                <div class="label">Subscription decisions</div>
-                <div class="value" id="decision-count">{{ profile.subscription_decisions|length }}</div>
+                <div class="label">User decisions & notes</div>
+                <div class="value" id="decision-count">{{ profile.user_decisions|length }}</div>
               </div>
             </div>
           </div>
@@ -608,20 +646,21 @@
           </div>
 
           <div class="panel">
-            <h2>Saved decisions</h2>
+            <h2>User decisions & notes</h2>
             <ul class="list" id="decisions-list">
-              {% if profile.subscription_decisions %}
-                {% for decision in profile.subscription_decisions %}
+              {% if profile.user_decisions %}
+                {% for decision in profile.user_decisions %}
                   <li>
                     <div class="row">
-                      <strong>{{ decision.merchant }}</strong>
-                      <span class="pill">{{ decision.decision }}</span>
+                      <strong>{{ decision.title }}</strong>
+                      <span class="pill">{{ decision.entry_type }}</span>
                     </div>
+                    <div class="small">{{ decision.content }}</div>
                     <div class="small muted">{{ decision.created_at }}</div>
                   </li>
                 {% endfor %}
               {% else %}
-                <li class="empty">Use the chat to mark a subscription as keep or cancel.</li>
+                <li class="empty">Use the chat to record decisions like cutting a subscription or switching to a different workout option.</li>
               {% endif %}
             </ul>
           </div>
@@ -648,6 +687,10 @@
           <div class="panel">
             <h2>AI Chatbot</h2>
             <p class="muted">Examples: “I ate at Howoo for $50”, “I spent $40”, or “Cancel Pilates.”</p>
+            <div class="inline-actions" id="messages-controls" hidden>
+              <button type="button" class="secondary" id="messages-toggle">Show earlier messages</button>
+              <button type="button" class="secondary" id="messages-jump-bottom">Jump to latest</button>
+            </div>
             <ul class="list messages" id="messages-list">
               {% if profile.messages %}
                 {% for message in profile.messages %}
@@ -678,6 +721,8 @@
     <div id="chart-tooltip" class="chart-tooltip" aria-hidden="true"></div>
     <script>
       let currentProfile = {{ profile|tojson }};
+      let showFullMessageHistory = false;
+      const COLLAPSED_MESSAGE_COUNT = 6;
 
       function money(value) {
         return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(value || 0);
@@ -692,7 +737,7 @@
         document.getElementById("total-spent").textContent = money(profile.total_spent);
         document.getElementById("transaction-count").textContent = profile.transaction_count;
         document.getElementById("recurring-total").textContent = money(profile.monthly_recurring_total);
-        document.getElementById("decision-count").textContent = (profile.subscription_decisions || []).length;
+        document.getElementById("decision-count").textContent = (profile.user_decisions || []).length;
         document.getElementById("monthly-income-value").textContent = money((profile.monthly_summary || {}).income);
         document.getElementById("fixed-expenses-value").textContent = money((profile.monthly_summary || {}).fixed_expenses);
         document.getElementById("available-before-fixed").textContent = money((profile.monthly_summary || {}).available_before_fixed);
@@ -708,7 +753,7 @@
 
         renderTransactions(applyTransactionFilter(profile.transactions || []));
         renderSubscriptions(profile.subscriptions || []);
-        renderDecisions(profile.subscription_decisions || []);
+        renderDecisions(profile.user_decisions || []);
         renderCategoryBreakdown(profile.category_breakdown || [], profile.total_spent || 0);
         renderMonthlyPlanHistory(profile.monthly_plan_history || []);
         renderAgentNotes(profile.agent_notes || []);
@@ -862,15 +907,16 @@
       function renderDecisions(decisions) {
         const list = document.getElementById("decisions-list");
         if (!decisions.length) {
-          list.innerHTML = '<li class="empty">Use the chat to mark a subscription as keep or cancel.</li>';
+          list.innerHTML = '<li class="empty">Use the chat to record decisions like cutting a subscription or switching to a different workout option.</li>';
           return;
         }
         list.innerHTML = decisions.map((decision) => `
           <li>
             <div class="row">
-              <strong>${decision.merchant}</strong>
-              <span class="pill">${decision.decision}</span>
+              <strong>${decision.title}</strong>
+              <span class="pill">${decision.entry_type}</span>
             </div>
+            <div class="small">${decision.content}</div>
             <div class="small muted">${decision.created_at}</div>
           </li>
         `).join("");
@@ -895,16 +941,41 @@
 
       function renderMessages(messages) {
         const list = document.getElementById("messages-list");
+        const controls = document.getElementById("messages-controls");
+        const toggle = document.getElementById("messages-toggle");
+        const jumpButton = document.getElementById("messages-jump-bottom");
         if (!messages.length) {
           list.innerHTML = '<li class="empty">No messages yet. Start with a real expense or a subscription decision.</li>';
+          controls.hidden = true;
           return;
         }
-        list.innerHTML = messages.map((message) => `
+        const hiddenCount = Math.max(messages.length - COLLAPSED_MESSAGE_COUNT, 0);
+        const visibleMessages = showFullMessageHistory ? messages : messages.slice(-COLLAPSED_MESSAGE_COUNT);
+        controls.hidden = messages.length <= COLLAPSED_MESSAGE_COUNT;
+        toggle.textContent = showFullMessageHistory
+          ? `Hide earlier messages (${hiddenCount})`
+          : `Show earlier messages (${hiddenCount})`;
+        jumpButton.hidden = false;
+        list.innerHTML = visibleMessages.map((message) => `
           <li class="${message.role}">
             <span class="pill">${message.role}</span>
             <span>${message.content}</span>
           </li>
         `).join("");
+        requestAnimationFrame(() => {
+          if (!showFullMessageHistory) {
+            list.scrollTop = list.scrollHeight;
+          }
+        });
+      }
+
+      function scrollMessagesToBottom() {
+        const list = document.getElementById("messages-list");
+        list.scrollTop = list.scrollHeight;
+        const lastMessage = list.lastElementChild;
+        if (lastMessage) {
+          lastMessage.scrollIntoView({ behavior: "smooth", block: "end" });
+        }
       }
 
       function renderAgentNotes(notes) {
@@ -993,6 +1064,8 @@
         renderProfile(payload.profile);
         status.textContent = payload.reply;
         input.value = "";
+        showFullMessageHistory = false;
+        scrollMessagesToBottom();
       });
 
       document.getElementById("chat-input").addEventListener("keydown", (event) => {
@@ -1008,6 +1081,17 @@
 
       document.getElementById("month-selector").addEventListener("change", (event) => {
         window.location.assign(`/?month=${encodeURIComponent(event.currentTarget.value)}`);
+      });
+
+      document.getElementById("messages-toggle").addEventListener("click", () => {
+        showFullMessageHistory = !showFullMessageHistory;
+        renderMessages((currentProfile && currentProfile.messages) || []);
+      });
+
+      document.getElementById("messages-jump-bottom").addEventListener("click", () => {
+        showFullMessageHistory = true;
+        renderMessages((currentProfile && currentProfile.messages) || []);
+        scrollMessagesToBottom();
       });
 
       renderProfile(currentProfile);
