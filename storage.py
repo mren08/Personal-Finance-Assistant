@@ -161,6 +161,14 @@ class Storage:
                     checked_at TEXT DEFAULT CURRENT_TIMESTAMP
                 );
 
+                CREATE TABLE IF NOT EXISTS receipt_behavior_insights (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                    month_key TEXT NOT NULL,
+                    note TEXT NOT NULL,
+                    created_at TEXT DEFAULT CURRENT_TIMESTAMP
+                );
+
                 """
             )
             self._repair_receipt_transaction_link_duplicates(conn)
@@ -566,6 +574,29 @@ class Storage:
                 """,
                 (normalized_key, category, round(float(confidence), 2), enrichment_source),
             )
+
+    def save_receipt_behavior_insight(self, user_id: int, month_key: str, note: str) -> None:
+        with self._connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO receipt_behavior_insights (user_id, month_key, note)
+                VALUES (?, ?, ?)
+                """,
+                (user_id, month_key, note),
+            )
+
+    def list_receipt_behavior_insights(self, user_id: int, month_key: str) -> list[str]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT note
+                FROM receipt_behavior_insights
+                WHERE user_id = ? AND month_key = ?
+                ORDER BY id DESC
+                """,
+                (user_id, month_key),
+            ).fetchall()
+        return [row["note"] for row in rows]
 
     def add_chat_message(self, user_id: int, role: str, content: str) -> None:
         with self._connect() as conn:
@@ -999,6 +1030,7 @@ class Storage:
             "agent_notes": self.list_agent_notes(user_id, selected_month),
             "monthly_summary": monthly_summary,
             "top_insights": self._top_insights(
+                user_id=user_id,
                 transactions=transactions,
                 selected_month=selected_month,
                 category_totals=category_totals,
@@ -1125,6 +1157,7 @@ class Storage:
 
     def _top_insights(
         self,
+        user_id: int,
         transactions: list[dict[str, Any]],
         selected_month: str | None,
         category_totals: dict[str, float],
@@ -1155,6 +1188,12 @@ class Storage:
                 insights.append(f"You are ${abs(leftover_money):.2f} over for {month_label} after fixed expenses.")
             else:
                 insights.append(f"You still have ${leftover_money:.2f} left in {month_label} after fixed expenses.")
+
+        if selected_month:
+            receipt_notes = self.list_receipt_behavior_insights(user_id, selected_month)
+            for note in receipt_notes:
+                if note not in insights:
+                    insights.append(note)
 
         return insights[:3]
 

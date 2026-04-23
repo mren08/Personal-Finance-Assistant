@@ -248,6 +248,58 @@ class StorageTests(unittest.TestCase):
             self.assertEqual(storage.list_pending_receipt_extractions(owner_user_id), [])
             self.assertEqual(storage.list_pending_receipt_extractions(other_user_id), [])
 
+    def test_storage_reuses_cached_merchant_category(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            storage = Storage(f"{tmpdir}/app.db")
+
+            storage.save_cached_merchant_category(
+                "sweetgreen",
+                category="Dining",
+                confidence=0.93,
+                enrichment_source="web",
+            )
+
+            cached = storage.get_cached_merchant_category("sweetgreen")
+
+            self.assertIsNotNone(cached)
+            self.assertEqual(cached["category"], "Dining")
+            self.assertEqual(cached["enrichment_source"], "web")
+            self.assertEqual(cached["confidence"], 0.93)
+
+    def test_storage_promotes_receipt_behavior_note_into_top_insights(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            storage = Storage(f"{tmpdir}/app.db")
+
+            user_id = storage.create_user("demo@example.com", "secret123")
+            storage.add_transactions(
+                user_id,
+                [
+                    {
+                        "date": "2026-04-10",
+                        "description": "Sweetgreen",
+                        "amount": 18.50,
+                        "category": "Dining",
+                        "source": "receipt",
+                    }
+                ],
+            )
+            storage.save_monthly_plan(
+                user_id,
+                month_key="2026-04",
+                monthly_income=4200,
+                fixed_expenses=1800,
+                budgeting_goal="Cut dining spend",
+            )
+            storage.save_receipt_behavior_insight(
+                user_id,
+                month_key="2026-04",
+                note="This is your 5th dining expense this week.",
+            )
+
+            dashboard = storage.get_dashboard_data(user_id, "2026-04")
+
+            self.assertIn("This is your 5th dining expense this week.", dashboard["top_insights"])
+
     def test_storage_repairs_duplicate_receipt_links_and_adds_unique_index(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             db_path = f"{tmpdir}/legacy.db"
