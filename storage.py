@@ -160,6 +160,9 @@ class Storage:
                     enrichment_source TEXT NOT NULL,
                     checked_at TEXT DEFAULT CURRENT_TIMESTAMP
                 );
+
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_receipt_transaction_links_receipt_extraction_id
+                ON receipt_transaction_links(receipt_extraction_id);
                 """
             )
 

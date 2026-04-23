@@ -248,6 +248,68 @@ class StorageTests(unittest.TestCase):
             self.assertEqual(storage.list_pending_receipt_extractions(owner_user_id), [])
             self.assertEqual(storage.list_pending_receipt_extractions(other_user_id), [])
 
+    def test_storage_adds_unique_receipt_link_index_to_legacy_database(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = f"{tmpdir}/legacy.db"
+            with sqlite3.connect(db_path) as conn:
+                conn.executescript(
+                    """
+                    CREATE TABLE users (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        email TEXT UNIQUE NOT NULL,
+                        password_hash TEXT NOT NULL
+                    );
+
+                    CREATE TABLE transactions (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                        date TEXT NOT NULL,
+                        description TEXT NOT NULL,
+                        amount REAL NOT NULL,
+                        category TEXT NOT NULL,
+                        source TEXT NOT NULL,
+                        created_at TEXT DEFAULT CURRENT_TIMESTAMP
+                    );
+
+                    CREATE TABLE receipt_extractions (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        receipt_upload_id INTEGER NOT NULL,
+                        user_id INTEGER NOT NULL,
+                        merchant TEXT NOT NULL DEFAULT '',
+                        transaction_date TEXT NOT NULL DEFAULT '',
+                        total_amount REAL NOT NULL DEFAULT 0,
+                        category TEXT NOT NULL DEFAULT '',
+                        category_confidence REAL NOT NULL DEFAULT 0,
+                        status TEXT NOT NULL,
+                        behavior_note TEXT NOT NULL DEFAULT '',
+                        item_tags_json TEXT NOT NULL DEFAULT '[]',
+                        raw_extraction_json TEXT NOT NULL DEFAULT '{}',
+                        web_enrichment_json TEXT NOT NULL DEFAULT '{}',
+                        reviewed_at TEXT,
+                        created_at TEXT DEFAULT CURRENT_TIMESTAMP
+                    );
+
+                    CREATE TABLE receipt_transaction_links (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        receipt_extraction_id INTEGER NOT NULL REFERENCES receipt_extractions(id) ON DELETE CASCADE,
+                        transaction_id INTEGER NOT NULL REFERENCES transactions(id) ON DELETE CASCADE,
+                        created_at TEXT DEFAULT CURRENT_TIMESTAMP
+                    );
+                    """
+                )
+
+            Storage(db_path)
+
+            with sqlite3.connect(db_path) as conn:
+                indexes = conn.execute("PRAGMA index_list('receipt_transaction_links')").fetchall()
+
+            self.assertTrue(
+                any(
+                    row[1] == "idx_receipt_transaction_links_receipt_extraction_id" and row[2] == 1
+                    for row in indexes
+                )
+            )
+
     def test_storage_persists_profile_notes_and_monthly_summary(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             storage = Storage(f"{tmpdir}/app.db")
