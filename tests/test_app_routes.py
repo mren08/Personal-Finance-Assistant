@@ -1124,6 +1124,41 @@ class AppRouteTests(unittest.TestCase):
         self.assertEqual(payload["receipts"][0]["behavior_note"], "db locked")
         self.assertNotIn("id", payload["receipts"][0])
 
+    def test_receipt_upload_converts_create_upload_failures_into_error_cards_without_blocking_batch(self):
+        self._signup_and_login()
+
+        original_create_receipt_upload = self.app.config["storage"].create_receipt_upload
+        call_count = 0
+
+        def flaky_create_receipt_upload(user_id, filename, storage_path):
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                raise sqlite3.OperationalError("upload row locked")
+            return original_create_receipt_upload(user_id, filename, storage_path)
+
+        with patch.object(self.app.config["storage"], "create_receipt_upload", side_effect=flaky_create_receipt_upload):
+            response = self.client.post(
+                "/api/upload-receipts",
+                data={
+                    "receipts": [
+                        (io.BytesIO(b"fake image 1"), "receipt-1.jpg"),
+                        (io.BytesIO(b"fake image 2"), "receipt-2.jpg"),
+                    ]
+                },
+                content_type="multipart/form-data",
+            )
+
+        payload = response.get_json()
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(len(payload["receipts"]), 2)
+        self.assertEqual(payload["receipts"][0]["status"], "error")
+        self.assertEqual(payload["receipts"][0]["behavior_note"], "upload row locked")
+        self.assertNotIn("id", payload["receipts"][0])
+        self.assertEqual(payload["receipts"][1]["status"], "needs_correction")
+        self.assertIn("id", payload["receipts"][1])
+
     def test_readme_mentions_web_service_flow_and_public_demo_risk(self):
         readme = Path("README.md").read_text(encoding="utf-8")
 

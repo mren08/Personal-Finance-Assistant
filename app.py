@@ -730,7 +730,22 @@ def extract_receipt_batch(files: list[Any], storage: Storage, user_id: int) -> l
     results: list[dict[str, Any]] = []
     for uploaded_file in files:
         filename = secure_filename(uploaded_file.filename or "receipt.jpg") or "receipt.jpg"
-        receipt_upload_id = storage.create_receipt_upload(user_id, filename, f"uploads/{filename}")
+        try:
+            receipt_upload_id = storage.create_receipt_upload(user_id, filename, f"uploads/{filename}")
+        except Exception as exc:
+            results.append(
+                {
+                    "merchant": "",
+                    "transaction_date": "",
+                    "total_amount": 0.0,
+                    "category": "",
+                    "category_confidence": 0.0,
+                    "status": "error",
+                    "behavior_note": str(exc),
+                    "item_tags": [],
+                }
+            )
+            continue
         results.append(
             {
                 "receipt_upload_id": receipt_upload_id,
