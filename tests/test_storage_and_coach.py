@@ -299,12 +299,14 @@ class StorageTests(unittest.TestCase):
                     INSERT INTO users (id, email, password_hash) VALUES (1, 'legacy@example.com', 'hash');
                     INSERT INTO transactions (id, user_id, date, description, amount, category, source)
                     VALUES (1, 1, '2026-04-23', 'Sweetgreen', 18.50, 'Dining', 'receipt');
+                    INSERT INTO transactions (id, user_id, date, description, amount, category, source)
+                    VALUES (2, 1, '2026-04-23', 'Sweetgreen', 18.50, 'Dining', 'receipt');
                     INSERT INTO receipt_extractions (id, receipt_upload_id, user_id, merchant, transaction_date, total_amount, category, category_confidence, status)
                     VALUES (1, 1, 1, 'Sweetgreen', '2026-04-23', 18.50, 'Dining', 0.91, 'approved');
                     INSERT INTO receipt_transaction_links (id, receipt_extraction_id, transaction_id)
                     VALUES (1, 1, 1);
                     INSERT INTO receipt_transaction_links (id, receipt_extraction_id, transaction_id)
-                    VALUES (2, 1, 1);
+                    VALUES (2, 1, 2);
                     """
                 )
 
@@ -314,9 +316,17 @@ class StorageTests(unittest.TestCase):
                 link_count = conn.execute(
                     "SELECT COUNT(*) FROM receipt_transaction_links WHERE receipt_extraction_id = 1"
                 ).fetchone()[0]
+                receipt_transaction_count = conn.execute(
+                    "SELECT COUNT(*) FROM transactions WHERE user_id = 1 AND source = 'receipt'"
+                ).fetchone()[0]
+                linked_transaction_id = conn.execute(
+                    "SELECT transaction_id FROM receipt_transaction_links WHERE receipt_extraction_id = 1"
+                ).fetchone()[0]
                 indexes = conn.execute("PRAGMA index_list('receipt_transaction_links')").fetchall()
 
             self.assertEqual(link_count, 1)
+            self.assertEqual(receipt_transaction_count, 1)
+            self.assertEqual(linked_transaction_id, 1)
             self.assertTrue(
                 any(
                     row[1] == "idx_receipt_transaction_links_receipt_extraction_id" and row[2] == 1

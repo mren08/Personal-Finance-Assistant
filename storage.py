@@ -173,16 +173,49 @@ class Storage:
 
     @staticmethod
     def _repair_receipt_transaction_link_duplicates(conn: sqlite3.Connection) -> None:
-        conn.execute(
+        duplicate_groups = conn.execute(
             """
-            DELETE FROM receipt_transaction_links
-            WHERE id NOT IN (
-                SELECT MIN(id)
+            SELECT receipt_extraction_id
+            FROM receipt_transaction_links
+            GROUP BY receipt_extraction_id
+            HAVING COUNT(*) > 1
+            """
+        ).fetchall()
+        for group in duplicate_groups:
+            rows = conn.execute(
+                """
+                SELECT id, transaction_id
                 FROM receipt_transaction_links
-                GROUP BY receipt_extraction_id
-            )
-            """
-        )
+                WHERE receipt_extraction_id = ?
+                ORDER BY id ASC
+                """,
+                (group["receipt_extraction_id"],),
+            ).fetchall()
+            if not rows:
+                continue
+            duplicate_rows = rows[1:]
+            for row in duplicate_rows:
+                transaction_id = int(row["transaction_id"])
+                usage_count = conn.execute(
+                    """
+                    SELECT COUNT(*)
+                    FROM receipt_transaction_links
+                    WHERE transaction_id = ?
+                    """,
+                    (transaction_id,),
+                ).fetchone()[0]
+                if usage_count == 1:
+                    transaction_row = conn.execute(
+                        """
+                        SELECT source
+                        FROM transactions
+                        WHERE id = ?
+                        """,
+                        (transaction_id,),
+                    ).fetchone()
+                    if transaction_row and transaction_row["source"] == "receipt":
+                        conn.execute("DELETE FROM transactions WHERE id = ?", (transaction_id,))
+                conn.execute("DELETE FROM receipt_transaction_links WHERE id = ?", (int(row["id"]),))
 
     @staticmethod
     def _hash_password(password: str) -> str:
