@@ -38,6 +38,26 @@ OCT_NOV_FOOD_CSV = """Transaction Date,Description,Category,Amount
 11/12/2025,CHIPOTLE,Food & Drink,-14.80
 """
 
+INSIGHTS_CSV = """Transaction Date,Description,Category,Amount
+01/03/2026,Restaurant Row,Dining,-100.00
+02/03/2026,Restaurant Row,Dining,-100.00
+03/03/2026,Restaurant Row,Dining,-100.00
+02/05/2026,NETFLIX.COM,Subscriptions,-15.49
+03/05/2026,NETFLIX.COM,Subscriptions,-15.49
+04/03/2026,Restaurant Row,Dining,-180.00
+04/05/2026,NETFLIX.COM,Subscriptions,-15.49
+"""
+
+BEHAVIOR_CSV = """Transaction Date,Description,Category,Amount
+04/04/2026,Brunch Club,Dining,-120.00
+04/05/2026,Cocktail Bar,Dining,-90.00
+04/06/2026,Office Lunch,Dining,-35.00
+04/10/2026,Delta Travel,Travel,-220.00
+04/11/2026,Airport Dinner,Dining,-70.00
+04/16/2026,Sushi Spot,Dining,-85.00
+04/17/2026,Steak Night,Dining,-75.00
+"""
+
 
 class AppRouteTests(unittest.TestCase):
     def setUp(self):
@@ -677,7 +697,6 @@ class AppRouteTests(unittest.TestCase):
         self.assertIn(b"Monthly income", response.data)
         self.assertIn(b"Fixed expenses", response.data)
         self.assertIn(b"Left this month", response.data)
-        self.assertIn(b"Agent notes", response.data)
         self.assertIn(b"Category breakdown", response.data)
         self.assertIn(b"category-donut-chart", response.data)
         self.assertIn(b"month-selector", response.data)
@@ -687,6 +706,114 @@ class AppRouteTests(unittest.TestCase):
         self.assertIn(b"messages-jump-bottom", response.data)
         self.assertIn(b"data-tooltip=", response.data)
         self.assertIn(b"chart-tooltip", response.data)
+
+    def test_dashboard_shows_top_three_insights_for_selected_month(self):
+        self._signup_and_login()
+        self.client.post(
+            "/api/upload-statement",
+            data={"statement": (io.BytesIO(INSIGHTS_CSV.encode("utf-8")), "statement.csv")},
+            content_type="multipart/form-data",
+        )
+        self.client.post(
+            "/api/profile",
+            json={
+                "month": "2026-04",
+                "monthly_income": 1000,
+                "fixed_expenses": 300,
+                "budgeting_goal": "Save 1000 for travel",
+            },
+        )
+
+        response = self.client.get("/?month=2026-04")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(b"Top 3 Insights This Month", response.data)
+        self.assertIn(b"more on Dining compared to your 3-month average", response.data)
+        self.assertIn(b"recurring subscriptions totaling", response.data)
+        self.assertIn(b"reaching your $1,000 goal", response.data)
+
+    def test_dashboard_shows_recommended_actions_above_subscriptions(self):
+        self._signup_and_login()
+        self.client.post(
+            "/api/upload-statement",
+            data={"statement": (io.BytesIO(INSIGHTS_CSV.encode("utf-8")), "statement.csv")},
+            content_type="multipart/form-data",
+        )
+        self.client.post(
+            "/api/profile",
+            json={
+                "month": "2026-04",
+                "monthly_income": 1000,
+                "fixed_expenses": 300,
+                "budgeting_goal": "Save 1000 for travel",
+            },
+        )
+
+        response = self.client.get("/?month=2026-04")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(b"Recommended Actions", response.data)
+        self.assertIn(b"Reduce Dining by", response.data)
+        self.assertIn(b"Cancel 1 subscription", response.data)
+        self.assertIn(b"Set weekly discretionary cap", response.data)
+        self.assertLess(response.data.find(b"Recommended Actions"), response.data.find(b"Recurring subscriptions"))
+
+    def test_dashboard_category_breakdown_shows_budget_and_last_month_context(self):
+        self._signup_and_login()
+        category_csv = """Transaction Date,Description,Category,Amount
+03/04/2026,Restaurant Row,Dining,-150.00
+04/04/2026,Restaurant Row,Dining,-420.00
+"""
+        self.client.post(
+            "/api/upload-statement",
+            data={"statement": (io.BytesIO(category_csv.encode("utf-8")), "statement.csv")},
+            content_type="multipart/form-data",
+        )
+        self.client.post(
+            "/api/profile",
+            json={
+                "month": "2026-04",
+                "monthly_income": 1000,
+                "fixed_expenses": 200,
+                "budgeting_goal": "Save 500 for travel",
+            },
+        )
+
+        response = self.client.get("/?month=2026-04")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(b"vs budget", response.data)
+        self.assertIn(b"vs last month", response.data)
+        self.assertIn(b"OVER budget", response.data)
+        self.assertIn(b"legend-item overspending", response.data)
+
+    def test_ai_chatbot_can_surface_behavioral_patterns(self):
+        self._signup_and_login()
+        self.client.post(
+            "/api/upload-statement",
+            data={"statement": (io.BytesIO(BEHAVIOR_CSV.encode("utf-8")), "statement.csv")},
+            content_type="multipart/form-data",
+        )
+        self.client.post(
+            "/api/profile",
+            json={
+                "month": "2026-04",
+                "monthly_income": 1000,
+                "fixed_expenses": 200,
+                "budgeting_goal": "Save 500 for travel",
+            },
+        )
+
+        response = self.client.post("/api/chat", json={"message": "what behavioral patterns do you see?"})
+        payload = response.get_json()
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("Behavior patterns", payload["reply"])
+        self.assertTrue(
+            "weekend" in payload["reply"].lower()
+            or "travel" in payload["reply"].lower()
+            or "week 3" in payload["reply"].lower()
+        )
 
     def test_analyze_rejects_blank_filename(self):
         response = self.client.post(

@@ -61,6 +61,7 @@ def _summarize_context(payload: dict) -> str:
     category_breakdown = context.get("category_breakdown") or []
     subscriptions = context.get("subscriptions") or []
     notes = context.get("agent_notes") or []
+    behavioral_insights = context.get("behavioral_insights") or []
     recent_messages = (context.get("messages") or [])[-8:]
     selected_month = context.get("selected_month_label") or "Unknown month"
 
@@ -77,6 +78,8 @@ def _summarize_context(payload: dict) -> str:
         json.dumps(subscriptions[:5], ensure_ascii=True),
         "Agent notes:",
         json.dumps(notes[:5], ensure_ascii=True),
+        "Behavioral insights:",
+        json.dumps(behavioral_insights[:5], ensure_ascii=True),
         "Recent conversation:",
         json.dumps(recent_messages, ensure_ascii=True),
         "Allowed action types:",

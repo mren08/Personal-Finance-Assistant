@@ -2,12 +2,15 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import sqlite3
 from collections import defaultdict
+from datetime import datetime
 from typing import Any
 
 from csv_parser import CategorizedTransaction, StatementCsvParser
 from recurrence import RecurringExpenseAnalyzer
+from recommender import BudgetRecommender
 
 
 class Storage:
@@ -594,13 +597,21 @@ class Storage:
             if selected_month is None or self._month_key_from_date(transaction["date"]) == selected_month
         ]
 
+        monthly_plan = self.get_monthly_plan(user_id, selected_month)
+        financial_profile = monthly_plan or self.get_financial_profile(user_id)
         category_totals = self._category_totals(selected_transactions)
         total_spent = round(sum(item["amount"] for item in selected_transactions), 2)
-        category_breakdown = self._category_breakdown(category_totals, total_spent)
+        category_breakdown = self._category_breakdown(
+            category_totals=category_totals,
+            total_spent=total_spent,
+            transactions=transactions,
+            selected_month=selected_month,
+            monthly_income=float((financial_profile or {}).get("monthly_income") or 0),
+        )
         recurring_expenses = self._recurring_expenses(transactions)
         monthly_recurring_total = round(sum(item["monthly_equivalent"] for item in recurring_expenses), 2)
 
-        monthly_plan = self.get_monthly_plan(user_id, selected_month)
+        monthly_summary = self.get_monthly_summary(user_id, selected_month)
         return {
             "transaction_count": len(selected_transactions),
             "total_spent": total_spent,
@@ -621,10 +632,29 @@ class Storage:
             "subscription_decisions": self.list_subscription_decisions(user_id),
             "user_decisions": self.list_user_decisions(user_id),
             "pending_action": self.get_pending_action(user_id),
-            "financial_profile": monthly_plan or self.get_financial_profile(user_id),
+            "financial_profile": financial_profile,
             "monthly_plan_history": self.list_monthly_plans(user_id),
             "agent_notes": self.list_agent_notes(user_id, selected_month),
-            "monthly_summary": self.get_monthly_summary(user_id, selected_month),
+            "monthly_summary": monthly_summary,
+            "top_insights": self._top_insights(
+                transactions=transactions,
+                selected_month=selected_month,
+                category_totals=category_totals,
+                recurring_expenses=recurring_expenses,
+                monthly_summary=monthly_summary,
+                financial_profile=financial_profile,
+            ),
+            "behavioral_insights": self._behavioral_insights(
+                transactions=transactions,
+                selected_month=selected_month,
+                monthly_income=float((financial_profile or {}).get("monthly_income") or 0),
+            ),
+            "recommended_actions": self._recommended_actions(
+                category_totals=category_totals,
+                recurring_expenses=recurring_expenses,
+                monthly_summary=monthly_summary,
+                financial_profile=financial_profile,
+            ),
         }
 
     @staticmethod
@@ -641,16 +671,63 @@ class Storage:
         )
 
     @staticmethod
-    def _category_breakdown(category_totals: dict[str, float], total_spent: float) -> list[dict[str, float | str]]:
+    def _category_breakdown(
+        category_totals: dict[str, float],
+        total_spent: float,
+        transactions: list[dict[str, Any]],
+        selected_month: str | None,
+        monthly_income: float,
+    ) -> list[dict[str, float | str]]:
         if total_spent <= 0:
             return []
 
         ordered = list(category_totals.items())
+        budget_caps = BudgetRecommender.default_target_max_ratio()
+        previous_month_key = None
+        if selected_month:
+            available_months = sorted({str(item["date"])[:7] for item in transactions})
+            try:
+                index = available_months.index(selected_month)
+                if index > 0:
+                    previous_month_key = available_months[index - 1]
+            except ValueError:
+                previous_month_key = None
+
+        previous_category_totals: dict[str, float] = defaultdict(float)
+        if previous_month_key:
+            for transaction in transactions:
+                if str(transaction["date"])[:7] == previous_month_key:
+                    previous_category_totals[transaction["category"]] += float(transaction["amount"])
+
         breakdown = []
         for index, (category, amount) in enumerate(ordered):
             percentage = round((amount / total_spent) * 100, 2)
-            if index == 0:
+            budget_ratio = budget_caps.get(category)
+            budget_amount = round(monthly_income * budget_ratio, 2) if budget_ratio and monthly_income > 0 else None
+            budget_pct = round((amount / budget_amount) * 100, 0) if budget_amount else None
+            budget_status = (
+                "OVER budget" if budget_amount is not None and amount > budget_amount else "within budget"
+            ) if budget_amount is not None else "no budget cap"
+
+            last_month_amount = round(previous_category_totals.get(category, 0.0), 2) if previous_month_key else None
+            if last_month_amount and last_month_amount > 0:
+                delta_pct = round(((amount - last_month_amount) / last_month_amount) * 100, 0)
+                trend_prefix = "↑" if delta_pct >= 0 else "↓"
+                last_month_text = f"{trend_prefix}{abs(int(delta_pct))}% vs last month"
+            elif previous_month_key:
+                last_month_text = "new vs last month"
+            else:
+                last_month_text = "no last-month comparison"
+
+            if budget_amount is not None:
+                budget_text = f"{int(budget_pct)}% vs budget" if budget_pct is not None else "vs budget unavailable"
+            else:
+                budget_text = "no budget cap"
+
+            if index == 0 and budget_status == "OVER budget":
                 shoutout = "This is your biggest leak this month."
+            elif budget_status == "OVER budget":
+                shoutout = "This category is over budget."
             elif percentage >= 20:
                 shoutout = "This is still taking a noticeable bite this month."
             else:
@@ -660,8 +737,12 @@ class Storage:
                     "category": category,
                     "amount": round(amount, 2),
                     "percentage": percentage,
+                    "budget_text": budget_text,
+                    "last_month_text": last_month_text,
+                    "budget_status": budget_status,
+                    "overspending": budget_status == "OVER budget",
                     "shoutout": shoutout,
-                    "tooltip": f"{category}: ${amount:.2f} ({percentage:.2f}%). {shoutout}",
+                    "tooltip": f"{category}: ${amount:.2f} ({last_month_text}, {budget_status}). {budget_text}. {shoutout}",
                 }
             )
         return breakdown
@@ -679,3 +760,189 @@ class Storage:
             for item in transactions
         ]
         return [expense.to_dict() for expense in analyzer.analyze(modeled)]
+
+    def _top_insights(
+        self,
+        transactions: list[dict[str, Any]],
+        selected_month: str | None,
+        category_totals: dict[str, float],
+        recurring_expenses: list[dict[str, Any]],
+        monthly_summary: dict[str, Any] | None,
+        financial_profile: dict[str, Any] | None,
+    ) -> list[str]:
+        insights: list[str] = []
+        if selected_month and category_totals:
+            category_insight = self._category_average_insight(transactions, selected_month, category_totals)
+            if category_insight:
+                insights.append(category_insight)
+
+        if recurring_expenses:
+            recurring_total = round(sum(float(item.get("monthly_equivalent") or 0) for item in recurring_expenses), 2)
+            insights.append(
+                f"You have {len(recurring_expenses)} recurring subscriptions totaling ${recurring_total:.2f}/month."
+            )
+
+        goal_insight = self._goal_pacing_insight(monthly_summary, financial_profile)
+        if goal_insight:
+            insights.append(goal_insight)
+
+        if monthly_summary and len(insights) < 3:
+            leftover_money = float(monthly_summary.get("leftover_money") or 0)
+            month_label = monthly_summary.get("month_label") or "this month"
+            if leftover_money < 0:
+                insights.append(f"You are ${abs(leftover_money):.2f} over for {month_label} after fixed expenses.")
+            else:
+                insights.append(f"You still have ${leftover_money:.2f} left in {month_label} after fixed expenses.")
+
+        return insights[:3]
+
+    def _recommended_actions(
+        self,
+        category_totals: dict[str, float],
+        recurring_expenses: list[dict[str, Any]],
+        monthly_summary: dict[str, Any] | None,
+        financial_profile: dict[str, Any] | None,
+    ) -> list[str]:
+        actions: list[str] = []
+        goal_text = str((financial_profile or {}).get("budgeting_goal") or "").strip()
+
+        if category_totals:
+            top_category, amount = next(iter(category_totals.items()))
+            reduction = max(25, round(amount * 0.33 / 5) * 5)
+            if goal_text:
+                actions.append(f"Reduce {top_category} by ${int(reduction)}/month to build more room for your goal.")
+            else:
+                actions.append(f"Reduce {top_category} by ${int(reduction)}/month to stop the biggest leak first.")
+
+        if recurring_expenses:
+            sorted_subs = sorted(
+                recurring_expenses,
+                key=lambda item: float(item.get("monthly_equivalent") or 0),
+                reverse=True,
+            )
+            sub_count = min(2, len(sorted_subs))
+            savings = round(sum(float(item.get("monthly_equivalent") or 0) for item in sorted_subs[:sub_count]), 2)
+            label = "subscription" if sub_count == 1 else "subscriptions"
+            actions.append(f"Cancel {sub_count} {label} -> save ${savings:.2f}/month.")
+
+        if monthly_summary:
+            available_before_fixed = float(monthly_summary.get("available_before_fixed") or 0)
+            fixed_expenses = float(monthly_summary.get("fixed_expenses") or 0)
+            weekly_cap = max(0, round((available_before_fixed - fixed_expenses) / 4 / 10) * 10)
+            actions.append(f"Set weekly discretionary cap to ${int(weekly_cap)}/week.")
+
+        return actions[:3]
+
+    def _behavioral_insights(
+        self,
+        transactions: list[dict[str, Any]],
+        selected_month: str | None,
+        monthly_income: float,
+    ) -> list[str]:
+        if not selected_month:
+            return []
+
+        selected_transactions = [
+            transaction for transaction in transactions if str(transaction["date"])[:7] == selected_month
+        ]
+        if not selected_transactions:
+            return []
+
+        insights: list[str] = []
+        weekend_total = 0.0
+        weekday_total = 0.0
+        weekend_days: set[str] = set()
+        weekday_days: set[str] = set()
+        for transaction in selected_transactions:
+            day = datetime.strptime(str(transaction["date"]), "%Y-%m-%d").weekday()
+            if day >= 5:
+                weekend_total += float(transaction["amount"])
+                weekend_days.add(str(transaction["date"]))
+            else:
+                weekday_total += float(transaction["amount"])
+                weekday_days.add(str(transaction["date"]))
+        if weekend_days and weekday_days:
+            weekend_avg = weekend_total / len(weekend_days)
+            weekday_avg = weekday_total / len(weekday_days)
+            if weekday_avg > 0 and weekend_avg > weekday_avg * 1.2:
+                pct = round(((weekend_avg - weekday_avg) / weekday_avg) * 100)
+                insights.append(f"You overspend on weekends (+{int(pct)}%).")
+
+        travel_dates = [
+            datetime.strptime(str(transaction["date"]), "%Y-%m-%d")
+            for transaction in selected_transactions
+            if str(transaction.get("category") or "").lower() == "travel"
+        ]
+        if travel_dates:
+            post_travel_total = 0.0
+            for transaction in selected_transactions:
+                transaction_date = datetime.strptime(str(transaction["date"]), "%Y-%m-%d")
+                if any(0 < (transaction_date - travel_date).days <= 3 for travel_date in travel_dates):
+                    if str(transaction.get("category") or "").lower() != "travel":
+                        post_travel_total += float(transaction["amount"])
+            if post_travel_total >= 50:
+                insights.append("Spending spikes occur after travel.")
+
+        if monthly_income > 0:
+            dining_budget = monthly_income * BudgetRecommender.default_target_max_ratio().get("Dining", 0.12)
+            week3_dining = sum(
+                float(transaction["amount"])
+                for transaction in selected_transactions
+                if str(transaction.get("category") or "").lower() == "dining"
+                and 15 <= int(str(transaction["date"])[8:10]) <= 21
+            )
+            if week3_dining > dining_budget:
+                insights.append("You consistently exceed dining budget in week 3.")
+
+        return insights[:3]
+
+    def _category_average_insight(
+        self,
+        transactions: list[dict[str, Any]],
+        selected_month: str,
+        category_totals: dict[str, float],
+    ) -> str | None:
+        top_category, current_amount = next(iter(category_totals.items()))
+        monthly_totals: dict[str, dict[str, float]] = defaultdict(lambda: defaultdict(float))
+        for transaction in transactions:
+            month = self._month_key_from_date(transaction["date"])
+            monthly_totals[month][transaction["category"]] += float(transaction["amount"])
+
+        prior_months = sorted(month for month in monthly_totals.keys() if month < selected_month)[-3:]
+        if not prior_months:
+            return None
+
+        prior_amounts = [monthly_totals[month].get(top_category, 0.0) for month in prior_months]
+        average = sum(prior_amounts) / len(prior_amounts)
+        if average <= 0:
+            return None
+
+        change_pct = round(((current_amount - average) / average) * 100, 0)
+        direction = "more" if change_pct >= 0 else "less"
+        return (
+            f"You are spending {abs(int(change_pct))}% {direction} on {top_category} compared to your 3-month average."
+        )
+
+    @staticmethod
+    def _goal_pacing_insight(monthly_summary: dict[str, Any] | None, financial_profile: dict[str, Any] | None) -> str | None:
+        if not monthly_summary or not financial_profile:
+            return None
+
+        goal_text = str(financial_profile.get("budgeting_goal") or "").strip()
+        if not goal_text:
+            return None
+
+        match = re.search(r"(\d[\d,]*(?:\.\d{1,2})?)", goal_text)
+        if not match:
+            return None
+
+        target_amount = float(match.group(1).replace(",", ""))
+        leftover_money = float(monthly_summary.get("leftover_money") or 0)
+        if leftover_money <= 0:
+            return f"At your current pace, reaching your ${target_amount:,.0f} goal will keep slipping unless you free up room this month."
+
+        months_needed = target_amount / leftover_money
+        if months_needed < 1:
+            weeks_needed = max(1, round(months_needed * 4.345))
+            return f"At your current pace, you can reach your ${target_amount:,.0f} goal in about {weeks_needed} weeks."
+        return f"At your current pace, reaching your ${target_amount:,.0f} goal will take about {months_needed:.1f} months."

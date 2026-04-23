@@ -218,6 +218,19 @@
       grid-template-columns: repeat(4, 1fr);
       gap: 12px;
     }
+    .insights-list {
+      list-style: none;
+      margin: 0;
+      padding: 0;
+      display: grid;
+      gap: 10px;
+    }
+    .insights-list li {
+      border: 1px solid #efe4d3;
+      border-radius: 14px;
+      padding: 12px 14px;
+      background: #fff8f1;
+    }
     .chart-panel {
       display: grid;
       grid-template-columns: 220px 1fr;
@@ -269,6 +282,10 @@
     }
     .legend-item, #category-donut-slices path {
       cursor: pointer;
+    }
+    .legend-item.overspending {
+      border-color: rgba(170, 31, 31, 0.38);
+      background: #fff4f2;
     }
     .legend-swatch {
       width: 12px;
@@ -448,6 +465,19 @@
       <section class="dashboard">
         <div class="stack">
           <div class="panel">
+            <h2>Top 3 Insights This Month</h2>
+            <ul class="insights-list" id="top-insights-list">
+              {% if profile.top_insights %}
+                {% for insight in profile.top_insights %}
+                  <li>{{ insight }}</li>
+                {% endfor %}
+              {% else %}
+                <li class="empty">Upload a few months of spending and save a goal to unlock richer monthly insights.</li>
+              {% endif %}
+            </ul>
+          </div>
+
+          <div class="panel">
             <h2>Personal Finance AI Assistant</h2>
             <p class="muted" id="selected-month-label" style="margin-bottom:12px;">Viewing {{ profile.selected_month_label or 'No month selected' }}</p>
             <div class="metric-grid">
@@ -561,12 +591,12 @@
               <ul class="legend" id="category-breakdown-legend">
                 {% if profile.category_breakdown %}
                   {% for item in profile.category_breakdown %}
-                    <li class="legend-item" data-tooltip="{{ item.tooltip }}" title="{{ item.tooltip }}">
+                    <li class="legend-item {% if item.overspending %}overspending{% endif %}" data-tooltip="{{ item.tooltip }}" title="{{ item.tooltip }}">
                       <span class="legend-swatch"></span>
                       <div>
                         <strong>{{ item.category }}</strong>
-                        <div class="small muted">{{ '%.2f'|format(item.percentage) }}% of tracked spend</div>
-                        <div class="small muted">{{ item.shoutout }}</div>
+                        <div class="small muted">{{ item.last_month_text }} · {{ item.budget_status }}</div>
+                        <div class="small muted">{{ item.budget_text }}</div>
                       </div>
                       <strong>${{ '%.2f'|format(item.amount) }}</strong>
                     </li>
@@ -627,6 +657,19 @@
 
         <div class="stack">
           <div class="panel">
+            <h2>Recommended Actions</h2>
+            <ul class="list" id="recommended-actions-list">
+              {% if profile.recommended_actions %}
+                {% for action in profile.recommended_actions %}
+                  <li>{{ action }}</li>
+                {% endfor %}
+              {% else %}
+                <li class="empty">Upload recent spending and save a monthly plan to unlock concrete actions.</li>
+              {% endif %}
+            </ul>
+          </div>
+
+          <div class="panel">
             <h2>Recurring subscriptions</h2>
             <ul class="list" id="subscriptions-list">
               {% if profile.subscriptions %}
@@ -661,25 +704,6 @@
                 {% endfor %}
               {% else %}
                 <li class="empty">Use the chat to record decisions like cutting a subscription or switching to a different workout option.</li>
-              {% endif %}
-            </ul>
-          </div>
-
-          <div class="panel">
-            <h2>Agent notes</h2>
-            <ul class="list" id="agent-notes-list">
-              {% if profile.agent_notes %}
-                {% for note in profile.agent_notes %}
-                  <li>
-                    <div class="row">
-                      <strong>{{ note.note_type.replace('_', ' ')|title }}</strong>
-                      <span class="small muted">{{ note.created_at }}</span>
-                    </div>
-                    <div class="small">{{ note.content }}</div>
-                  </li>
-                {% endfor %}
-              {% else %}
-                <li class="empty">No agent notes yet. Save your monthly plan or ask the coach for a grounded check-in.</li>
               {% endif %}
             </ul>
           </div>
@@ -754,9 +778,10 @@
         renderTransactions(applyTransactionFilter(profile.transactions || []));
         renderSubscriptions(profile.subscriptions || []);
         renderDecisions(profile.user_decisions || []);
+        renderTopInsights(profile.top_insights || []);
+        renderRecommendedActions(profile.recommended_actions || []);
         renderCategoryBreakdown(profile.category_breakdown || [], profile.total_spent || 0);
         renderMonthlyPlanHistory(profile.monthly_plan_history || []);
-        renderAgentNotes(profile.agent_notes || []);
         renderMessages(profile.messages || []);
       }
 
@@ -816,6 +841,7 @@
       }
 
       const DONUT_COLORS = ["#ab3b2f", "#d57a32", "#e1b24b", "#6c8a4f", "#3f6f73", "#845a9b", "#bf6d7f"];
+      const OVERSPEND_COLOR = "#aa1f1f";
 
       function polarToCartesian(cx, cy, radius, angleInDegrees) {
         const angleInRadians = (angleInDegrees - 90) * Math.PI / 180.0;
@@ -847,19 +873,19 @@
         slices.innerHTML = breakdown.map((item, index) => {
           const sweep = Math.max((item.percentage / 100) * 360, 0.6);
           const path = describeArc(110, 110, 78, startAngle, startAngle + sweep);
-          const color = DONUT_COLORS[index % DONUT_COLORS.length];
+          const color = item.overspending ? OVERSPEND_COLOR : DONUT_COLORS[index % DONUT_COLORS.length];
           const tooltip = String(item.tooltip || "").replaceAll('"', "&quot;");
           startAngle += sweep;
           return `<path d="${path}" stroke="${color}" stroke-width="44" fill="none" stroke-linecap="butt" data-tooltip="${tooltip}"><title>${item.tooltip || ""}</title></path>`;
         }).join("");
 
         legend.innerHTML = breakdown.map((item, index) => `
-          <li class="legend-item" data-tooltip="${item.tooltip || ""}" title="${item.tooltip || ""}">
-            <span class="legend-swatch" style="background:${DONUT_COLORS[index % DONUT_COLORS.length]};"></span>
+          <li class="legend-item ${item.overspending ? "overspending" : ""}" data-tooltip="${item.tooltip || ""}" title="${item.tooltip || ""}">
+            <span class="legend-swatch" style="background:${item.overspending ? OVERSPEND_COLOR : DONUT_COLORS[index % DONUT_COLORS.length]};"></span>
             <div>
               <strong>${item.category}</strong>
-              <div class="small muted">${item.percentage.toFixed(2)}% of tracked spend</div>
-              <div class="small muted">${item.shoutout || ""}</div>
+              <div class="small muted">${item.last_month_text || ""} · ${item.budget_status || ""}</div>
+              <div class="small muted">${item.budget_text || ""}</div>
             </div>
             <strong>${money(item.amount)}</strong>
           </li>
@@ -939,6 +965,24 @@
         `).join("");
       }
 
+      function renderTopInsights(insights) {
+        const list = document.getElementById("top-insights-list");
+        if (!insights.length) {
+          list.innerHTML = '<li class="empty">Upload a few months of spending and save a goal to unlock richer monthly insights.</li>';
+          return;
+        }
+        list.innerHTML = insights.map((insight) => `<li>${insight}</li>`).join("");
+      }
+
+      function renderRecommendedActions(actions) {
+        const list = document.getElementById("recommended-actions-list");
+        if (!actions.length) {
+          list.innerHTML = '<li class="empty">Upload recent spending and save a monthly plan to unlock concrete actions.</li>';
+          return;
+        }
+        list.innerHTML = actions.map((action) => `<li>${action}</li>`).join("");
+      }
+
       function renderMessages(messages) {
         const list = document.getElementById("messages-list");
         const controls = document.getElementById("messages-controls");
@@ -976,23 +1020,6 @@
         if (lastMessage) {
           lastMessage.scrollIntoView({ behavior: "smooth", block: "end" });
         }
-      }
-
-      function renderAgentNotes(notes) {
-        const list = document.getElementById("agent-notes-list");
-        if (!notes.length) {
-          list.innerHTML = '<li class="empty">No agent notes yet. Save your monthly plan or ask the coach for a grounded check-in.</li>';
-          return;
-        }
-        list.innerHTML = notes.map((note) => `
-          <li>
-            <div class="row">
-              <strong>${String(note.note_type || "").replaceAll("_", " ")}</strong>
-              <span class="small muted">${note.created_at || ""}</span>
-            </div>
-            <div class="small">${note.content || ""}</div>
-          </li>
-        `).join("");
       }
 
       document.getElementById("profile-form").addEventListener("submit", async (event) => {

@@ -101,6 +101,7 @@ class AgentServiceTests(unittest.TestCase):
                     "category_breakdown": [{"category": "Dining", "amount": 120.0}],
                     "subscriptions": [{"merchant": "Netflix", "monthly_equivalent": 15.49}],
                     "agent_notes": [{"note_type": "April 2026 focus", "content": "Watch dining."}],
+                    "behavioral_insights": ["You overspend on weekends (+35%)."],
                     "messages": [
                         {"role": "assistant", "content": "I noticed Netflix."},
                         {"role": "user", "content": "Should I keep it?"},
@@ -113,6 +114,8 @@ class AgentServiceTests(unittest.TestCase):
         self.assertIn("Latest user message: Should I keep it?", summary)
         self.assertIn("Selected month: April 2026", summary)
         self.assertIn('"merchant": "Netflix"', summary)
+        self.assertIn("Behavioral insights:", summary)
+        self.assertIn("You overspend on weekends (+35%).", summary)
         self.assertIn('"content": "I noticed Netflix."', summary)
 
     def test_agent_service_parses_llm_actions_and_notes(self):

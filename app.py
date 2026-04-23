@@ -29,6 +29,7 @@ class _FallbackAgentClient:
         category_breakdown = context.get("category_breakdown") or []
         subscriptions = context.get("subscriptions") or []
         notes = context.get("agent_notes") or []
+        behavioral_insights = context.get("behavioral_insights") or []
         messages = context.get("messages") or []
         goal = str(financial_profile.get("budgeting_goal") or "").strip()
         available_before_fixed = monthly_summary.get("available_before_fixed")
@@ -47,6 +48,8 @@ class _FallbackAgentClient:
             reply = merchant_reply
         elif topic_reply:
             reply = topic_reply
+        elif behavioral_insights and any(token in message for token in {"pattern", "patterns", "behavior", "behaviour", "habit", "habits"}):
+            reply = "Behavior patterns I see:\n- " + "\n- ".join(behavioral_insights[:3])
         elif referenced_subscription and (
             any(token in message for token in {"alternative", "alternatives", "instead", "swap", "replace"})
             or alternative_follow_up
@@ -82,6 +85,7 @@ class _FallbackAgentClient:
                 strongest_subscription=strongest_subscription,
                 goal=goal,
                 note_content=note_content,
+                behavioral_insights=behavioral_insights,
             )
         elif biggest and any(token in message for token in {"why", "where", "problem", "wrong", "overspending"}):
             reply = (
@@ -130,6 +134,7 @@ class _FallbackAgentClient:
         strongest_subscription: dict | None,
         goal: str,
         note_content: str,
+        behavioral_insights: list[str],
     ) -> str:
         lines = [f"For {month_label}:"]
         if biggest:
@@ -152,6 +157,8 @@ class _FallbackAgentClient:
                 lines.append("Action: decide now whether that money goes to savings, debt payoff, or retirement before it disappears.")
         if goal:
             lines.append(f"Goal: {goal}.")
+        if behavioral_insights:
+            lines.append(f"Pattern: {behavioral_insights[0]}")
         if note_content:
             lines.append(f"Note: {note_content}")
         if len(lines) == 1:
