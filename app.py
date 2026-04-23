@@ -914,6 +914,7 @@ def create_app() -> Flask:
             profile=profile,
             auth_notice=session.pop("auth_notice", None),
             auth_error=session.pop("auth_error", None),
+            auth_mode="login",
         )
 
     @app.route("/healthz")
@@ -936,6 +937,7 @@ def create_app() -> Flask:
                     profile=None,
                     auth_notice=None,
                     auth_error=str(exc),
+                    auth_mode="signup",
                 ),
                 400,
             )
@@ -957,11 +959,35 @@ def create_app() -> Flask:
                     profile=None,
                     auth_notice=None,
                     auth_error="Invalid email or password.",
+                    auth_mode="login",
                 ),
                 401,
             )
         session["user_id"] = user_id
         session.pop("selected_month", None)
+        return redirect(url_for("index"))
+
+    @app.route("/forgot-password", methods=["POST"])
+    def forgot_password():
+        email = request.form.get("email", "").strip()
+        new_password = request.form.get("new_password", "")
+        try:
+            get_storage().update_password(email, new_password)
+        except ValueError as exc:
+            return (
+                render_template(
+                    "index.html",
+                    default_budget_caps=BudgetRecommender.default_target_max_ratio(),
+                    logged_in=False,
+                    user=None,
+                    profile=None,
+                    auth_notice=None,
+                    auth_error=str(exc),
+                    auth_mode="login",
+                ),
+                400,
+            )
+        session["auth_notice"] = "Password updated. Sign in with your new password."
         return redirect(url_for("index"))
 
     @app.route("/logout", methods=["POST"])

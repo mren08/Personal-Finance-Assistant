@@ -150,6 +150,19 @@ class Storage:
             return None
         return int(row["id"])
 
+    def update_password(self, email: str, new_password: str) -> None:
+        normalized_email = email.strip().lower()
+        if not normalized_email or not new_password:
+            raise ValueError("Email and new password are required.")
+
+        with self._connect() as conn:
+            cursor = conn.execute(
+                "UPDATE users SET password_hash = ? WHERE email = ?",
+                (self._hash_password(new_password), normalized_email),
+            )
+        if cursor.rowcount == 0:
+            raise ValueError("No account found for that email.")
+
     def get_user(self, user_id: int) -> dict[str, Any] | None:
         with self._connect() as conn:
             row = conn.execute("SELECT id, email FROM users WHERE id = ?", (user_id,)).fetchone()

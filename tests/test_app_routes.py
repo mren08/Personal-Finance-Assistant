@@ -135,8 +135,10 @@ class AppRouteTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertIn(b"Account created. Sign in with the email and password you just set.", response.data)
-        self.assertIn(b"Create account", response.data)
         self.assertIn(b"Sign in", response.data)
+        self.assertIn(b"No account?", response.data)
+        self.assertIn(b"Create one now", response.data)
+        self.assertIn(b'id="signup-panel" hidden', response.data)
         self.assertNotIn(b"AI Chatbot", response.data)
 
     def test_login_shows_error_for_bad_credentials(self):
@@ -150,6 +152,25 @@ class AppRouteTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 401)
         self.assertIn(b"Invalid email or password.", response.data)
+
+    def test_forgot_password_updates_password_and_shows_notice(self):
+        self.client.post("/signup", data={"email": "demo@example.com", "password": "secret123"})
+
+        reset_response = self.client.post(
+            "/forgot-password",
+            data={"email": "demo@example.com", "new_password": "newsecret456"},
+            follow_redirects=True,
+        )
+        login_response = self.client.post(
+            "/login",
+            data={"email": "demo@example.com", "password": "newsecret456"},
+            follow_redirects=True,
+        )
+
+        self.assertEqual(reset_response.status_code, 200)
+        self.assertIn(b"Password updated. Sign in with your new password.", reset_response.data)
+        self.assertEqual(login_response.status_code, 200)
+        self.assertIn(b"AI Chatbot", login_response.data)
 
     def test_upload_persists_transactions_for_logged_in_user(self):
         self._signup_and_login()
@@ -706,6 +727,30 @@ class AppRouteTests(unittest.TestCase):
         self.assertIn(b"messages-jump-bottom", response.data)
         self.assertIn(b"data-tooltip=", response.data)
         self.assertIn(b"chart-tooltip", response.data)
+
+    def test_logged_out_homepage_shows_forgot_password_form(self):
+        response = self.client.get("/")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(b"Forgot password?", response.data)
+        self.assertIn(b"/forgot-password", response.data)
+        self.assertIn(b"No account?", response.data)
+        self.assertIn(b"Create one now", response.data)
+        self.assertIn(b'id="signup-panel" hidden', response.data)
+
+    def test_signup_error_reopens_create_account_panel(self):
+        self.client.post("/signup", data={"email": "demo@example.com", "password": "secret123"})
+
+        response = self.client.post(
+            "/signup",
+            data={"email": "demo@example.com", "password": "secret123"},
+            follow_redirects=True,
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn(b"An account with that email already exists.", response.data)
+        self.assertIn(b'id="signup-panel"', response.data)
+        self.assertNotIn(b'id="signup-panel" hidden', response.data)
 
     def test_dashboard_shows_top_three_insights_for_selected_month(self):
         self._signup_and_login()

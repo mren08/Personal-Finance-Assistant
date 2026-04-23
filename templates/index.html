@@ -150,6 +150,19 @@
       background: #f7dfda;
       color: #7d281f;
     }
+    .auth-link {
+      color: #f6cdb5;
+      text-decoration: underline;
+      text-underline-offset: 2px;
+      cursor: pointer;
+      font-weight: 600;
+    }
+    .auth-link:hover {
+      color: #fff7f0;
+    }
+    .auth-panel[hidden] {
+      display: none;
+    }
     .inline-actions {
       display: flex;
       flex-wrap: wrap;
@@ -408,25 +421,13 @@
         </div>
         <div class="auth-card">
           <h2>Start tracking</h2>
-          <p>Create an account, upload a statement, then use the chatbox to add missing spend, review subscriptions, and get personalized budgeting guidance based on your spending history.</p>
+          <p>Sign in to your account, upload a statement, then use the chatbox to add missing spend, review subscriptions, and get personalized budgeting guidance based on your spending history.</p>
           {% if auth_notice %}
             <div class="auth-feedback notice">{{ auth_notice }}</div>
           {% endif %}
           {% if auth_error %}
             <div class="auth-feedback error">{{ auth_error }}</div>
           {% endif %}
-          <form class="form-stack" method="post" action="/signup">
-            <div>
-              <label for="signup-email">Email</label>
-              <input id="signup-email" name="email" type="email" required>
-            </div>
-            <div>
-              <label for="signup-password">Password</label>
-              <input id="signup-password" name="password" type="password" required>
-            </div>
-            <button type="submit">Create account</button>
-          </form>
-          <p class="small" style="margin:12px 0 8px;">Already have an account?</p>
           <form class="form-stack" method="post" action="/login">
             <div>
               <label for="login-email">Email</label>
@@ -437,6 +438,35 @@
               <input id="login-password" name="password" type="password" required>
             </div>
             <button class="secondary" type="submit">Sign in</button>
+          </form>
+          <p class="small" style="margin:12px 0 8px;">
+            No account?
+            <a href="#signup-panel" id="signup-toggle" class="auth-link">Create one now</a>
+          </p>
+          <div class="auth-panel" id="signup-panel" {% if auth_mode != "signup" %}hidden{% endif %}>
+            <form class="form-stack" method="post" action="/signup">
+              <div>
+                <label for="signup-email">Email</label>
+                <input id="signup-email" name="email" type="email" required>
+              </div>
+              <div>
+                <label for="signup-password">Password</label>
+                <input id="signup-password" name="password" type="password" required>
+              </div>
+              <button type="submit">Create account</button>
+            </form>
+          </div>
+          <p class="small" style="margin:12px 0 8px;">Forgot password?</p>
+          <form class="form-stack" method="post" action="/forgot-password">
+            <div>
+              <label for="forgot-email">Email</label>
+              <input id="forgot-email" name="email" type="email" required>
+            </div>
+            <div>
+              <label for="forgot-password">New password</label>
+              <input id="forgot-password" name="new_password" type="password" required>
+            </div>
+            <button class="secondary" type="submit">Reset password</button>
           </form>
         </div>
       </section>
@@ -740,6 +770,23 @@
       </section>
     {% endif %}
   </div>
+
+  {% if not logged_in %}
+    <script>
+      const signupToggle = document.getElementById("signup-toggle");
+      const signupPanel = document.getElementById("signup-panel");
+      if (signupToggle && signupPanel) {
+        signupToggle.addEventListener("click", (event) => {
+          event.preventDefault();
+          signupPanel.hidden = false;
+          const emailInput = document.getElementById("signup-email");
+          if (emailInput) {
+            emailInput.focus();
+          }
+        });
+      }
+    </script>
+  {% endif %}
 
   {% if logged_in %}
     <div id="chart-tooltip" class="chart-tooltip" aria-hidden="true"></div>
