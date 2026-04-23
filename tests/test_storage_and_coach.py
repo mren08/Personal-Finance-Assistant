@@ -1,6 +1,7 @@
 import tempfile
 import unittest
 import sqlite3
+from unittest import mock
 
 from coach import OverspendingCoach
 from storage import Storage
@@ -99,6 +100,143 @@ class StorageTests(unittest.TestCase):
                 storage.get_receipt_transaction_link(extraction_id)["transaction_id"],
                 transaction_id,
             )
+
+    def test_storage_rolls_back_receipt_approval_when_transaction_insert_fails(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            storage = Storage(f"{tmpdir}/app.db")
+
+            user_id = storage.create_user("demo@example.com", "secret123")
+            receipt_id = storage.create_receipt_upload(user_id, "receipt-3.jpg", "uploads/receipt-3.jpg")
+            extraction_id = storage.save_receipt_extraction(
+                user_id,
+                receipt_upload_id=receipt_id,
+                merchant="Whole Foods",
+                transaction_date="2026-04-23",
+                total_amount=31.10,
+                category="Groceries",
+                category_confidence=0.97,
+                status="ready",
+                behavior_note="This fits your normal grocery pattern.",
+                item_tags_json="[]",
+                raw_extraction_json="{}",
+                web_enrichment_json="{}",
+            )
+
+            with mock.patch.object(storage, "_insert_transaction_row", side_effect=RuntimeError("boom")):
+                with self.assertRaises(RuntimeError):
+                    storage.approve_receipt_extraction(
+                        user_id,
+                        extraction_id,
+                        merchant="Whole Foods",
+                        transaction_date="2026-04-23",
+                        total_amount=31.10,
+                        category="Groceries",
+                    )
+
+            receipts = storage.list_pending_receipt_extractions(user_id)
+            dashboard = storage.get_dashboard_data(user_id, "2026-04")
+
+            self.assertEqual(len(receipts), 1)
+            self.assertEqual(receipts[0]["status"], "ready")
+            self.assertEqual(dashboard["transaction_count"], 0)
+            self.assertIsNone(storage.get_receipt_transaction_link(extraction_id))
+
+    def test_storage_rejects_duplicate_or_disallowed_receipt_approval_states(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            storage = Storage(f"{tmpdir}/app.db")
+
+            user_id = storage.create_user("demo@example.com", "secret123")
+            approved_upload_id = storage.create_receipt_upload(user_id, "receipt-4.jpg", "uploads/receipt-4.jpg")
+            approved_extraction_id = storage.save_receipt_extraction(
+                user_id,
+                receipt_upload_id=approved_upload_id,
+                merchant="Sweetgreen",
+                transaction_date="2026-04-23",
+                total_amount=18.50,
+                category="Dining",
+                category_confidence=0.91,
+                status="ready",
+                behavior_note="This is your 5th dining expense this week.",
+                item_tags_json="[]",
+                raw_extraction_json="{}",
+                web_enrichment_json="{}",
+            )
+            storage.approve_receipt_extraction(
+                user_id,
+                approved_extraction_id,
+                merchant="Sweetgreen",
+                transaction_date="2026-04-23",
+                total_amount=18.50,
+                category="Dining",
+            )
+
+            with self.assertRaises(ValueError):
+                storage.approve_receipt_extraction(
+                    user_id,
+                    approved_extraction_id,
+                    merchant="Sweetgreen",
+                    transaction_date="2026-04-23",
+                    total_amount=18.50,
+                    category="Dining",
+                )
+
+            discarded_upload_id = storage.create_receipt_upload(user_id, "receipt-5.jpg", "uploads/receipt-5.jpg")
+            discarded_extraction_id = storage.save_receipt_extraction(
+                user_id,
+                receipt_upload_id=discarded_upload_id,
+                merchant="Target",
+                transaction_date="2026-04-24",
+                total_amount=42.75,
+                category="Groceries",
+                category_confidence=0.88,
+                status="ready",
+                behavior_note="This fits your normal grocery pattern.",
+                item_tags_json="[]",
+                raw_extraction_json="{}",
+                web_enrichment_json="{}",
+            )
+            storage.discard_receipt_extraction(user_id, discarded_extraction_id)
+
+            with self.assertRaises(ValueError):
+                storage.approve_receipt_extraction(
+                    user_id,
+                    discarded_extraction_id,
+                    merchant="Target",
+                    transaction_date="2026-04-24",
+                    total_amount=42.75,
+                    category="Groceries",
+                )
+
+            dashboard = storage.get_dashboard_data(user_id)
+            self.assertEqual(dashboard["transaction_count"], 1)
+            self.assertEqual(len(dashboard["all_transactions"]), 1)
+
+    def test_storage_rejects_receipt_extraction_for_mismatched_upload_owner(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            storage = Storage(f"{tmpdir}/app.db")
+
+            owner_user_id = storage.create_user("owner@example.com", "secret123")
+            other_user_id = storage.create_user("other@example.com", "secret123")
+            receipt_id = storage.create_receipt_upload(owner_user_id, "receipt-6.jpg", "uploads/receipt-6.jpg")
+
+            with self.assertRaises(ValueError):
+                storage.save_receipt_extraction(
+                    other_user_id,
+                    receipt_upload_id=receipt_id,
+                    merchant="Trader Joe's",
+                    transaction_date="2026-04-23",
+                    total_amount=48.22,
+                    category="Groceries",
+                    category_confidence=0.94,
+                    status="ready",
+                    behavior_note="This fits your normal grocery pattern.",
+                    item_tags_json='["essential spending"]',
+                    raw_extraction_json='{"total":"48.22"}',
+                    web_enrichment_json='{"source":"none"}',
+                )
+
+            self.assertEqual(storage.list_pending_receipt_extractions(owner_user_id), [])
+            self.assertEqual(storage.list_pending_receipt_extractions(other_user_id), [])
 
     def test_storage_persists_profile_notes_and_monthly_summary(self):
         with tempfile.TemporaryDirectory() as tmpdir:

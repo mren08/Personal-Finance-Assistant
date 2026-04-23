@@ -240,7 +240,21 @@ class Storage:
         if not transactions:
             return
 
-        rows = [
+        with self._connect() as conn:
+            for item in transactions:
+                self._insert_transaction_row(conn, user_id, item)
+
+    def _insert_transaction_row(
+        self,
+        conn: sqlite3.Connection,
+        user_id: int,
+        item: dict[str, Any],
+    ) -> int:
+        cursor = conn.execute(
+            """
+            INSERT INTO transactions (user_id, date, description, amount, category, source)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
             (
                 user_id,
                 item["date"],
@@ -248,17 +262,9 @@ class Storage:
                 round(float(item["amount"]), 2),
                 item["category"],
                 item["source"],
-            )
-            for item in transactions
-        ]
-        with self._connect() as conn:
-            conn.executemany(
-                """
-                INSERT INTO transactions (user_id, date, description, amount, category, source)
-                VALUES (?, ?, ?, ?, ?, ?)
-                """,
-                rows,
-            )
+            ),
+        )
+        return int(cursor.lastrowid)
 
     @staticmethod
     def _normalize_merchant_key(merchant_key: str) -> str:
@@ -291,6 +297,18 @@ class Storage:
         web_enrichment_json: str,
     ) -> int:
         with self._connect() as conn:
+            upload_row = conn.execute(
+                """
+                SELECT user_id
+                FROM receipt_uploads
+                WHERE id = ?
+                """,
+                (receipt_upload_id,),
+            ).fetchone()
+            if not upload_row:
+                raise ValueError("Receipt upload does not exist.")
+            if int(upload_row["user_id"]) != user_id:
+                raise ValueError("Receipt upload does not belong to that user.")
             cursor = conn.execute(
                 """
                 INSERT INTO receipt_extractions (
@@ -373,7 +391,7 @@ class Storage:
         with self._connect() as conn:
             row = conn.execute(
                 """
-                SELECT id
+                SELECT id, status, receipt_upload_id
                 FROM receipt_extractions
                 WHERE id = ? AND user_id = ?
                 """,
@@ -381,6 +399,8 @@ class Storage:
             ).fetchone()
             if not row:
                 raise ValueError("No receipt extraction found for that user.")
+            if row["status"] not in {"ready", "needs_category"}:
+                raise ValueError("Receipt extraction is not pending review.")
             conn.execute(
                 """
                 UPDATE receipt_extractions
@@ -403,45 +423,25 @@ class Storage:
                 ),
             )
 
-        self.add_transactions(
-            user_id,
-            [
+            transaction_id = self._insert_transaction_row(
+                conn,
+                user_id,
                 {
                     "date": transaction_date,
                     "description": merchant,
                     "amount": total_amount,
                     "category": category,
                     "source": "receipt",
-                }
-            ],
-        )
-
-        with self._connect() as conn:
-            transaction_row = conn.execute(
-                """
-                SELECT id
-                FROM transactions
-                WHERE user_id = ?
-                  AND date = ?
-                  AND description = ?
-                  AND amount = ?
-                  AND category = ?
-                  AND source = 'receipt'
-                ORDER BY id DESC
-                LIMIT 1
-                """,
-                (user_id, transaction_date, merchant, round(float(total_amount), 2), category),
-            ).fetchone()
-            if not transaction_row:
-                raise RuntimeError("Approved receipt transaction was not created.")
-            cursor = conn.execute(
+                },
+            )
+            conn.execute(
                 """
                 INSERT INTO receipt_transaction_links (receipt_extraction_id, transaction_id)
                 VALUES (?, ?)
                 """,
-                (extraction_id, int(transaction_row["id"])),
+                (extraction_id, transaction_id),
             )
-            return int(transaction_row["id"])
+            return transaction_id
 
     def discard_receipt_extraction(self, user_id: int, extraction_id: int) -> None:
         with self._connect() as conn:
