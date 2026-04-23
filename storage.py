@@ -148,7 +148,7 @@ class Storage:
 
                 CREATE TABLE IF NOT EXISTS receipt_transaction_links (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    receipt_extraction_id INTEGER NOT NULL UNIQUE REFERENCES receipt_extractions(id) ON DELETE CASCADE,
+                    receipt_extraction_id INTEGER NOT NULL REFERENCES receipt_extractions(id) ON DELETE CASCADE,
                     transaction_id INTEGER NOT NULL REFERENCES transactions(id) ON DELETE CASCADE,
                     created_at TEXT DEFAULT CURRENT_TIMESTAMP
                 );
@@ -161,10 +161,28 @@ class Storage:
                     checked_at TEXT DEFAULT CURRENT_TIMESTAMP
                 );
 
-                CREATE UNIQUE INDEX IF NOT EXISTS idx_receipt_transaction_links_receipt_extraction_id
-                ON receipt_transaction_links(receipt_extraction_id);
                 """
             )
+            self._repair_receipt_transaction_link_duplicates(conn)
+            conn.execute(
+                """
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_receipt_transaction_links_receipt_extraction_id
+                ON receipt_transaction_links(receipt_extraction_id)
+                """
+            )
+
+    @staticmethod
+    def _repair_receipt_transaction_link_duplicates(conn: sqlite3.Connection) -> None:
+        conn.execute(
+            """
+            DELETE FROM receipt_transaction_links
+            WHERE id NOT IN (
+                SELECT MIN(id)
+                FROM receipt_transaction_links
+                GROUP BY receipt_extraction_id
+            )
+            """
+        )
 
     @staticmethod
     def _hash_password(password: str) -> str:
