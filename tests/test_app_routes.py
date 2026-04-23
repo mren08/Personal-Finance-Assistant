@@ -75,6 +75,17 @@ class AppRouteTests(unittest.TestCase):
             follow_redirects=follow_redirects,
         )
 
+    def _upload_receipt_for_review(self, filename: str = "receipt.jpg") -> dict:
+        response = self.client.post(
+            "/api/upload-receipts",
+            data={"receipts": [(io.BytesIO(b"fake image"), filename)]},
+            content_type="multipart/form-data",
+        )
+        self.assertEqual(response.status_code, 200)
+        payload = response.get_json()
+        self.assertEqual(len(payload["receipts"]), 1)
+        return payload["receipts"][0]
+
     def tearDown(self):
         self.temp_dir.cleanup()
         os.environ.pop("APP_DB_PATH", None)
@@ -910,43 +921,124 @@ class AppRouteTests(unittest.TestCase):
         self.assertIn("id", payload["receipts"][0])
         self.assertIn("id", payload["receipts"][1])
 
-    def test_receipt_review_blocks_save_when_category_needs_user_choice(self):
+    def test_receipt_review_allows_approving_uploaded_receipt_with_corrected_fields(self):
         self._signup_and_login()
-        storage = self.app.config["storage"]
-        user_id = storage.authenticate_user("demo@example.com", "secret123")
-        receipt_upload_id = storage.create_receipt_upload(user_id, "receipt-review.jpg", "uploads/receipt-review.jpg")
-        extraction_id = storage.save_receipt_extraction(
-            user_id,
-            receipt_upload_id=receipt_upload_id,
-            merchant="Trader Joe's",
-            transaction_date="2026-04-23",
-            total_amount=48.22,
-            category="",
-            category_confidence=0.0,
-            status="needs_category",
-            behavior_note="",
-            item_tags_json="[]",
-            raw_extraction_json="{}",
-            web_enrichment_json="{}",
-        )
 
+        receipt = self._upload_receipt_for_review("receipt-approve.jpg")
         response = self.client.post(
-            f"/api/receipts/{extraction_id}/approve",
+            f"/api/receipts/{receipt['id']}/approve",
             json={
                 "merchant": "Trader Joe's",
                 "transaction_date": "2026-04-23",
                 "total_amount": 48.22,
-                "category": "   ",
+                "category": "Groceries",
+                "month": "2026-04",
             },
         )
+
+        payload = response.get_json()
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("transaction_id", payload)
+        self.assertEqual(payload["profile"]["transaction_count"], 1)
+        self.assertEqual(payload["profile"]["transactions"][0]["description"], "Trader Joe's")
+        self.assertEqual(payload["profile"]["transactions"][0]["category"], "Groceries")
+        self.assertEqual(payload["profile"]["transactions"][0]["source"], "receipt")
+
+    def test_receipt_review_rejects_invalid_approval_payloads(self):
+        self._signup_and_login()
+        receipt = self._upload_receipt_for_review("receipt-invalid.jpg")
+
+        invalid_cases = [
+            (
+                {
+                    "merchant": "   ",
+                    "transaction_date": "2026-04-23",
+                    "total_amount": 48.22,
+                    "category": "Groceries",
+                },
+                {"error": "Merchant is required before saving this receipt."},
+            ),
+            (
+                {
+                    "merchant": "Trader Joe's",
+                    "transaction_date": "   ",
+                    "total_amount": 48.22,
+                    "category": "Groceries",
+                },
+                {"error": "Transaction date is required before saving this receipt."},
+            ),
+            (
+                {
+                    "merchant": "Trader Joe's",
+                    "transaction_date": "04/23/2026",
+                    "total_amount": 48.22,
+                    "category": "Groceries",
+                },
+                {"error": "Transaction date must use YYYY-MM-DD."},
+            ),
+            (
+                {
+                    "merchant": "Trader Joe's",
+                    "transaction_date": "2026-04-23",
+                    "total_amount": "abc",
+                    "category": "Groceries",
+                },
+                {"error": "Total amount must be a valid number greater than 0."},
+            ),
+            (
+                {
+                    "merchant": "Trader Joe's",
+                    "transaction_date": "2026-04-23",
+                    "total_amount": 0,
+                    "category": "Groceries",
+                },
+                {"error": "Total amount must be a valid number greater than 0."},
+            ),
+            (
+                {
+                    "merchant": "Trader Joe's",
+                    "transaction_date": "2026-04-23",
+                    "total_amount": 48.22,
+                    "category": "   ",
+                },
+                {"error": "Choose a category before saving this receipt."},
+            ),
+        ]
+
+        for payload, expected in invalid_cases:
+            with self.subTest(payload=payload):
+                response = self.client.post(
+                    f"/api/receipts/{receipt['id']}/approve",
+                    json=payload,
+                )
+                self.assertEqual(response.status_code, 400)
+                self.assertEqual(response.get_json(), expected)
+
+    def test_receipt_discard_rejects_already_approved_receipt(self):
+        self._signup_and_login()
+        receipt = self._upload_receipt_for_review("receipt-approved.jpg")
+        approve_response = self.client.post(
+            f"/api/receipts/{receipt['id']}/approve",
+            json={
+                "merchant": "Sweetgreen",
+                "transaction_date": "2026-04-23",
+                "total_amount": 18.5,
+                "category": "Dining",
+                "month": "2026-04",
+            },
+        )
+        self.assertEqual(approve_response.status_code, 200)
+
+        response = self.client.post(f"/api/receipts/{receipt['id']}/discard")
 
         self.assertEqual(response.status_code, 400)
         self.assertEqual(
             response.get_json(),
-            {"error": "Choose a category before saving this receipt."},
+            {"error": "Receipt extraction has already been finalized."},
         )
 
-    def test_receipt_upload_keeps_one_failed_receipt_from_blocking_batch(self):
+    def test_receipt_upload_marks_persistence_failures_as_error_cards(self):
         self._signup_and_login()
 
         with patch("app.extract_receipt_batch") as extract_receipt_batch:
@@ -990,7 +1082,9 @@ class AppRouteTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(len(payload["receipts"]), 2)
-        self.assertEqual(payload["receipts"][0]["status"], "ready")
+        self.assertEqual(payload["receipts"][0]["status"], "error")
+        self.assertEqual(payload["receipts"][0]["behavior_note"], "Receipt upload does not exist.")
+        self.assertNotIn("id", payload["receipts"][0])
         self.assertEqual(payload["receipts"][1]["status"], "error")
 
     def test_readme_mentions_web_service_flow_and_public_demo_risk(self):

@@ -746,6 +746,33 @@ def extract_receipt_batch(files: list[Any], storage: Storage, user_id: int) -> l
     return results
 
 
+def _validate_receipt_review_payload(payload: dict[str, Any]) -> tuple[str, str, float, str]:
+    merchant = str(payload.get("merchant") or "").strip()
+    if not merchant:
+        raise ValueError("Merchant is required before saving this receipt.")
+
+    transaction_date = str(payload.get("transaction_date") or "").strip()
+    if not transaction_date:
+        raise ValueError("Transaction date is required before saving this receipt.")
+    try:
+        datetime.strptime(transaction_date, "%Y-%m-%d")
+    except ValueError as exc:
+        raise ValueError("Transaction date must use YYYY-MM-DD.") from exc
+
+    try:
+        total_amount = float(payload.get("total_amount"))
+    except (TypeError, ValueError) as exc:
+        raise ValueError("Total amount must be a valid number greater than 0.") from exc
+    if total_amount <= 0:
+        raise ValueError("Total amount must be a valid number greater than 0.")
+
+    category = str(payload.get("category") or "").strip()
+    if not category:
+        raise ValueError("Choose a category before saving this receipt.")
+
+    return merchant, transaction_date, total_amount, category
+
+
 def create_app() -> Flask:
     app = Flask(__name__)
     app.secret_key = os.getenv("SECRET_KEY", "dev-secret")
@@ -1220,8 +1247,14 @@ def create_app() -> Flask:
                     raw_extraction_json=json.dumps({}),
                     web_enrichment_json=json.dumps({}),
                 )
-            except ValueError:
-                saved_cards.append(card)
+            except ValueError as exc:
+                saved_cards.append(
+                    {
+                        **card,
+                        "status": "error",
+                        "behavior_note": str(exc),
+                    }
+                )
                 continue
             saved_cards.append({**card, "id": extraction_id})
         return jsonify({"receipts": saved_cards}), 200
@@ -1234,17 +1267,18 @@ def create_app() -> Flask:
             return jsonify({"error": str(exc)}), 401
 
         payload = request.get_json(silent=True) or {}
-        category = str(payload.get("category") or "").strip()
-        if not category:
-            return jsonify({"error": "Choose a category before saving this receipt."}), 400
+        try:
+            merchant, transaction_date, total_amount, category = _validate_receipt_review_payload(payload)
+        except ValueError as exc:
+            return jsonify({"error": str(exc)}), 400
 
         try:
             transaction_id = get_storage().approve_receipt_extraction(
                 user_id,
                 extraction_id,
-                merchant=str(payload.get("merchant") or ""),
-                transaction_date=str(payload.get("transaction_date") or ""),
-                total_amount=float(payload.get("total_amount") or 0),
+                merchant=merchant,
+                transaction_date=transaction_date,
+                total_amount=total_amount,
                 category=category,
             )
         except ValueError as exc:
@@ -1260,7 +1294,10 @@ def create_app() -> Flask:
         except PermissionError as exc:
             return jsonify({"error": str(exc)}), 401
 
-        get_storage().discard_receipt_extraction(user_id, extraction_id)
+        try:
+            get_storage().discard_receipt_extraction(user_id, extraction_id)
+        except ValueError as exc:
+            return jsonify({"error": str(exc)}), 400
         return jsonify({"ok": True}), 200
 
     @app.route("/api/chat", methods=["POST"])

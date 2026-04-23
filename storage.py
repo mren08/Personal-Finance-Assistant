@@ -456,6 +456,7 @@ class Storage:
         category: str,
     ) -> int:
         with self._connect() as conn:
+            # Placeholder uploads start in needs_correction and become approvable once the user supplies valid edits.
             cursor = conn.execute(
                 """
                 UPDATE receipt_extractions
@@ -465,7 +466,7 @@ class Storage:
                     category = ?,
                     status = ?,
                     reviewed_at = CURRENT_TIMESTAMP
-                WHERE id = ? AND user_id = ? AND status IN ('ready', 'needs_category')
+                WHERE id = ? AND user_id = ? AND status IN ('ready', 'needs_category', 'needs_correction')
                 """,
                 (
                     merchant,
@@ -517,6 +518,19 @@ class Storage:
 
     def discard_receipt_extraction(self, user_id: int, extraction_id: int) -> None:
         with self._connect() as conn:
+            row = conn.execute(
+                """
+                SELECT status
+                FROM receipt_extractions
+                WHERE id = ? AND user_id = ?
+                """,
+                (extraction_id, user_id),
+            ).fetchone()
+            if not row:
+                raise ValueError("No receipt extraction found for that user.")
+            if row["status"] in {"approved", "discarded"}:
+                raise ValueError("Receipt extraction has already been finalized.")
+
             conn.execute(
                 """
                 UPDATE receipt_extractions
