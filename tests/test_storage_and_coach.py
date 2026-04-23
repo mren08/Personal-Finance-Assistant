@@ -275,9 +275,16 @@ class StorageTests(unittest.TestCase):
                 user_id,
                 [
                     {
+                        "date": "2026-03-10",
+                        "description": "Sweetgreen",
+                        "amount": 12.00,
+                        "category": "Dining",
+                        "source": "statement",
+                    },
+                    {
                         "date": "2026-04-10",
                         "description": "Sweetgreen",
-                        "amount": 18.50,
+                        "amount": 18.00,
                         "category": "Dining",
                         "source": "receipt",
                     }
@@ -288,7 +295,18 @@ class StorageTests(unittest.TestCase):
                 month_key="2026-04",
                 monthly_income=4200,
                 fixed_expenses=1800,
-                budgeting_goal="Cut dining spend",
+                budgeting_goal="Save $1000 for vacation",
+            )
+            storage.save_monthly_summary(
+                user_id,
+                month_key="2026-04",
+                income=4200,
+                fixed_expenses=1800,
+                tracked_spending=1800,
+                recurring_monthly_total=0,
+                leftover_money=300,
+                discretionary_remaining=300,
+                summary_text="April summary",
             )
             storage.save_receipt_behavior_insight(
                 user_id,
@@ -298,7 +316,12 @@ class StorageTests(unittest.TestCase):
 
             dashboard = storage.get_dashboard_data(user_id, "2026-04")
 
+            self.assertEqual(len(dashboard["top_insights"]), 3)
             self.assertIn("This is your 5th dining expense this week.", dashboard["top_insights"])
+            self.assertNotIn(
+                "You still have $300.00 left in April 2026 after fixed expenses.",
+                dashboard["top_insights"],
+            )
 
     def test_storage_repairs_duplicate_receipt_links_and_adds_unique_index(self):
         with tempfile.TemporaryDirectory() as tmpdir:

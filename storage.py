@@ -1005,6 +1005,7 @@ class Storage:
         monthly_recurring_total = round(sum(item["monthly_equivalent"] for item in recurring_expenses), 2)
 
         monthly_summary = self.get_monthly_summary(user_id, selected_month)
+        receipt_behavior_notes = self.list_receipt_behavior_insights(user_id, selected_month) if selected_month else []
         return {
             "transaction_count": len(selected_transactions),
             "total_spent": total_spent,
@@ -1030,13 +1031,13 @@ class Storage:
             "agent_notes": self.list_agent_notes(user_id, selected_month),
             "monthly_summary": monthly_summary,
             "top_insights": self._top_insights(
-                user_id=user_id,
                 transactions=transactions,
                 selected_month=selected_month,
                 category_totals=category_totals,
                 recurring_expenses=recurring_expenses,
                 monthly_summary=monthly_summary,
                 financial_profile=financial_profile,
+                receipt_notes=receipt_behavior_notes,
             ),
             "behavioral_insights": self._behavioral_insights(
                 transactions=transactions,
@@ -1157,13 +1158,13 @@ class Storage:
 
     def _top_insights(
         self,
-        user_id: int,
         transactions: list[dict[str, Any]],
         selected_month: str | None,
         category_totals: dict[str, float],
         recurring_expenses: list[dict[str, Any]],
         monthly_summary: dict[str, Any] | None,
         financial_profile: dict[str, Any] | None,
+        receipt_notes: list[str] | None = None,
     ) -> list[str]:
         insights: list[str] = []
         if selected_month and category_totals:
@@ -1181,6 +1182,11 @@ class Storage:
         if goal_insight:
             insights.append(goal_insight)
 
+        if receipt_notes:
+            for note in receipt_notes:
+                if note not in insights:
+                    insights.append(note)
+
         if monthly_summary and len(insights) < 3:
             leftover_money = float(monthly_summary.get("leftover_money") or 0)
             month_label = monthly_summary.get("month_label") or "this month"
@@ -1188,12 +1194,6 @@ class Storage:
                 insights.append(f"You are ${abs(leftover_money):.2f} over for {month_label} after fixed expenses.")
             else:
                 insights.append(f"You still have ${leftover_money:.2f} left in {month_label} after fixed expenses.")
-
-        if selected_month:
-            receipt_notes = self.list_receipt_behavior_insights(user_id, selected_month)
-            for note in receipt_notes:
-                if note not in insights:
-                    insights.append(note)
 
         return insights[:3]
 
