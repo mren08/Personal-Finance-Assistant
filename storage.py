@@ -118,6 +118,48 @@ class Storage:
                     created_at TEXT DEFAULT CURRENT_TIMESTAMP,
                     UNIQUE(user_id, month_key)
                 );
+
+                CREATE TABLE IF NOT EXISTS receipt_uploads (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                    filename TEXT NOT NULL,
+                    storage_path TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    created_at TEXT DEFAULT CURRENT_TIMESTAMP
+                );
+
+                CREATE TABLE IF NOT EXISTS receipt_extractions (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    receipt_upload_id INTEGER NOT NULL REFERENCES receipt_uploads(id) ON DELETE CASCADE,
+                    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                    merchant TEXT NOT NULL DEFAULT '',
+                    transaction_date TEXT NOT NULL DEFAULT '',
+                    total_amount REAL NOT NULL DEFAULT 0,
+                    category TEXT NOT NULL DEFAULT '',
+                    category_confidence REAL NOT NULL DEFAULT 0,
+                    status TEXT NOT NULL,
+                    behavior_note TEXT NOT NULL DEFAULT '',
+                    item_tags_json TEXT NOT NULL DEFAULT '[]',
+                    raw_extraction_json TEXT NOT NULL DEFAULT '{}',
+                    web_enrichment_json TEXT NOT NULL DEFAULT '{}',
+                    reviewed_at TEXT,
+                    created_at TEXT DEFAULT CURRENT_TIMESTAMP
+                );
+
+                CREATE TABLE IF NOT EXISTS receipt_transaction_links (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    receipt_extraction_id INTEGER NOT NULL REFERENCES receipt_extractions(id) ON DELETE CASCADE,
+                    transaction_id INTEGER NOT NULL REFERENCES transactions(id) ON DELETE CASCADE,
+                    created_at TEXT DEFAULT CURRENT_TIMESTAMP
+                );
+
+                CREATE TABLE IF NOT EXISTS merchant_category_cache (
+                    merchant_key TEXT PRIMARY KEY,
+                    category TEXT NOT NULL,
+                    confidence REAL NOT NULL,
+                    enrichment_source TEXT NOT NULL,
+                    checked_at TEXT DEFAULT CURRENT_TIMESTAMP
+                );
                 """
             )
 
@@ -216,6 +258,254 @@ class Storage:
                 VALUES (?, ?, ?, ?, ?, ?)
                 """,
                 rows,
+            )
+
+    @staticmethod
+    def _normalize_merchant_key(merchant_key: str) -> str:
+        return merchant_key.strip().lower()
+
+    def create_receipt_upload(self, user_id: int, filename: str, storage_path: str) -> int:
+        with self._connect() as conn:
+            cursor = conn.execute(
+                """
+                INSERT INTO receipt_uploads (user_id, filename, storage_path, status)
+                VALUES (?, ?, ?, ?)
+                """,
+                (user_id, filename, storage_path, "uploaded"),
+            )
+            return int(cursor.lastrowid)
+
+    def save_receipt_extraction(
+        self,
+        user_id: int,
+        receipt_upload_id: int,
+        merchant: str,
+        transaction_date: str,
+        total_amount: float,
+        category: str,
+        category_confidence: float,
+        status: str,
+        behavior_note: str,
+        item_tags_json: str,
+        raw_extraction_json: str,
+        web_enrichment_json: str,
+    ) -> int:
+        with self._connect() as conn:
+            cursor = conn.execute(
+                """
+                INSERT INTO receipt_extractions (
+                    receipt_upload_id,
+                    user_id,
+                    merchant,
+                    transaction_date,
+                    total_amount,
+                    category,
+                    category_confidence,
+                    status,
+                    behavior_note,
+                    item_tags_json,
+                    raw_extraction_json,
+                    web_enrichment_json
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    receipt_upload_id,
+                    user_id,
+                    merchant,
+                    transaction_date,
+                    round(float(total_amount), 2),
+                    category,
+                    round(float(category_confidence), 2),
+                    status,
+                    behavior_note,
+                    item_tags_json,
+                    raw_extraction_json,
+                    web_enrichment_json,
+                ),
+            )
+            return int(cursor.lastrowid)
+
+    def list_pending_receipt_extractions(self, user_id: int) -> list[dict[str, Any]]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT
+                    id,
+                    receipt_upload_id,
+                    merchant,
+                    transaction_date,
+                    total_amount,
+                    category,
+                    category_confidence,
+                    status,
+                    behavior_note,
+                    item_tags_json,
+                    raw_extraction_json,
+                    web_enrichment_json,
+                    reviewed_at,
+                    created_at
+                FROM receipt_extractions
+                WHERE user_id = ?
+                  AND status != 'discarded'
+                  AND status != 'approved'
+                ORDER BY id DESC
+                """,
+                (user_id,),
+            ).fetchall()
+        pending_receipts = []
+        for row in rows:
+            item = dict(row)
+            item["total_amount"] = round(float(item["total_amount"]), 2)
+            item["category_confidence"] = round(float(item["category_confidence"]), 2)
+            pending_receipts.append(item)
+        return pending_receipts
+
+    def approve_receipt_extraction(
+        self,
+        user_id: int,
+        extraction_id: int,
+        merchant: str,
+        transaction_date: str,
+        total_amount: float,
+        category: str,
+    ) -> int:
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                SELECT id
+                FROM receipt_extractions
+                WHERE id = ? AND user_id = ?
+                """,
+                (extraction_id, user_id),
+            ).fetchone()
+            if not row:
+                raise ValueError("No receipt extraction found for that user.")
+            conn.execute(
+                """
+                UPDATE receipt_extractions
+                SET merchant = ?,
+                    transaction_date = ?,
+                    total_amount = ?,
+                    category = ?,
+                    status = ?,
+                    reviewed_at = CURRENT_TIMESTAMP
+                WHERE id = ? AND user_id = ?
+                """,
+                (
+                    merchant,
+                    transaction_date,
+                    round(float(total_amount), 2),
+                    category,
+                    "approved",
+                    extraction_id,
+                    user_id,
+                ),
+            )
+
+        self.add_transactions(
+            user_id,
+            [
+                {
+                    "date": transaction_date,
+                    "description": merchant,
+                    "amount": total_amount,
+                    "category": category,
+                    "source": "receipt",
+                }
+            ],
+        )
+
+        with self._connect() as conn:
+            transaction_row = conn.execute(
+                """
+                SELECT id
+                FROM transactions
+                WHERE user_id = ?
+                  AND date = ?
+                  AND description = ?
+                  AND amount = ?
+                  AND category = ?
+                  AND source = 'receipt'
+                ORDER BY id DESC
+                LIMIT 1
+                """,
+                (user_id, transaction_date, merchant, round(float(total_amount), 2), category),
+            ).fetchone()
+            if not transaction_row:
+                raise RuntimeError("Approved receipt transaction was not created.")
+            cursor = conn.execute(
+                """
+                INSERT INTO receipt_transaction_links (receipt_extraction_id, transaction_id)
+                VALUES (?, ?)
+                """,
+                (extraction_id, int(transaction_row["id"])),
+            )
+            return int(transaction_row["id"])
+
+    def discard_receipt_extraction(self, user_id: int, extraction_id: int) -> None:
+        with self._connect() as conn:
+            conn.execute(
+                """
+                UPDATE receipt_extractions
+                SET status = ?, reviewed_at = CURRENT_TIMESTAMP
+                WHERE id = ? AND user_id = ?
+                """,
+                ("discarded", extraction_id, user_id),
+            )
+
+    def get_receipt_transaction_link(self, extraction_id: int) -> dict[str, Any] | None:
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                SELECT id, receipt_extraction_id, transaction_id, created_at
+                FROM receipt_transaction_links
+                WHERE receipt_extraction_id = ?
+                ORDER BY id DESC
+                LIMIT 1
+                """,
+                (extraction_id,),
+            ).fetchone()
+        if not row:
+            return None
+        return dict(row)
+
+    def get_cached_merchant_category(self, merchant_key: str) -> dict[str, Any] | None:
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                SELECT merchant_key, category, confidence, enrichment_source, checked_at
+                FROM merchant_category_cache
+                WHERE merchant_key = ?
+                """,
+                (self._normalize_merchant_key(merchant_key),),
+            ).fetchone()
+        if not row:
+            return None
+        cached = dict(row)
+        cached["confidence"] = round(float(cached["confidence"]), 2)
+        return cached
+
+    def save_cached_merchant_category(self, merchant_key: str, category: str, confidence: float, enrichment_source: str) -> None:
+        normalized_key = self._normalize_merchant_key(merchant_key)
+        with self._connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO merchant_category_cache (
+                    merchant_key,
+                    category,
+                    confidence,
+                    enrichment_source,
+                    checked_at
+                )
+                VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
+                ON CONFLICT(merchant_key) DO UPDATE SET
+                    category = excluded.category,
+                    confidence = excluded.confidence,
+                    enrichment_source = excluded.enrichment_source,
+                    checked_at = CURRENT_TIMESTAMP
+                """,
+                (normalized_key, category, round(float(confidence), 2), enrichment_source),
             )
 
     def add_chat_message(self, user_id: int, role: str, content: str) -> None:

@@ -30,6 +30,76 @@ class StorageTests(unittest.TestCase):
             self.assertEqual(profile["transaction_count"], 1)
             self.assertEqual(profile["category_totals"]["Subscriptions"], 15.49)
 
+    def test_storage_creates_and_lists_pending_receipt_extractions(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            storage = Storage(f"{tmpdir}/app.db")
+
+            user_id = storage.create_user("demo@example.com", "secret123")
+            receipt_id = storage.create_receipt_upload(
+                user_id,
+                filename="receipt-1.jpg",
+                storage_path="uploads/receipt-1.jpg",
+            )
+            storage.save_receipt_extraction(
+                user_id,
+                receipt_upload_id=receipt_id,
+                merchant="Trader Joe's",
+                transaction_date="2026-04-23",
+                total_amount=48.22,
+                category="Groceries",
+                category_confidence=0.94,
+                status="ready",
+                behavior_note="This fits your normal grocery pattern.",
+                item_tags_json='["essential spending"]',
+                raw_extraction_json='{"total":"48.22"}',
+                web_enrichment_json='{"source":"none"}',
+            )
+
+            receipts = storage.list_pending_receipt_extractions(user_id)
+
+            self.assertEqual(len(receipts), 1)
+            self.assertEqual(receipts[0]["merchant"], "Trader Joe's")
+            self.assertEqual(receipts[0]["status"], "ready")
+
+    def test_storage_approves_receipt_into_single_transaction_and_links_it(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            storage = Storage(f"{tmpdir}/app.db")
+
+            user_id = storage.create_user("demo@example.com", "secret123")
+            receipt_id = storage.create_receipt_upload(user_id, "receipt-2.jpg", "uploads/receipt-2.jpg")
+            extraction_id = storage.save_receipt_extraction(
+                user_id,
+                receipt_upload_id=receipt_id,
+                merchant="Sweetgreen",
+                transaction_date="2026-04-23",
+                total_amount=18.50,
+                category="Dining",
+                category_confidence=0.91,
+                status="ready",
+                behavior_note="This is your 5th dining expense this week.",
+                item_tags_json="[]",
+                raw_extraction_json="{}",
+                web_enrichment_json='{"source":"cache"}',
+            )
+
+            transaction_id = storage.approve_receipt_extraction(
+                user_id,
+                extraction_id,
+                merchant="Sweetgreen",
+                transaction_date="2026-04-23",
+                total_amount=18.50,
+                category="Dining",
+            )
+            dashboard = storage.get_dashboard_data(user_id, "2026-04")
+
+            self.assertEqual(dashboard["transaction_count"], 1)
+            self.assertEqual(dashboard["transactions"][0]["description"], "Sweetgreen")
+            self.assertEqual(dashboard["transactions"][0]["category"], "Dining")
+            self.assertEqual(
+                storage.get_receipt_transaction_link(extraction_id)["transaction_id"],
+                transaction_id,
+            )
+
     def test_storage_persists_profile_notes_and_monthly_summary(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             storage = Storage(f"{tmpdir}/app.db")
