@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import math
 import os
 import re
 import tempfile
@@ -763,7 +764,7 @@ def _validate_receipt_review_payload(payload: dict[str, Any]) -> tuple[str, str,
         total_amount = float(payload.get("total_amount"))
     except (TypeError, ValueError) as exc:
         raise ValueError("Total amount must be a valid number greater than 0.") from exc
-    if total_amount <= 0:
+    if not math.isfinite(total_amount) or total_amount <= 0:
         raise ValueError("Total amount must be a valid number greater than 0.")
 
     category = str(payload.get("category") or "").strip()
@@ -1247,7 +1248,7 @@ def create_app() -> Flask:
                     raw_extraction_json=json.dumps({}),
                     web_enrichment_json=json.dumps({}),
                 )
-            except ValueError as exc:
+            except Exception as exc:
                 saved_cards.append(
                     {
                         **card,

@@ -1,4 +1,5 @@
 import io
+import sqlite3
 import os
 import tempfile
 import unittest
@@ -990,6 +991,24 @@ class AppRouteTests(unittest.TestCase):
                 {
                     "merchant": "Trader Joe's",
                     "transaction_date": "2026-04-23",
+                    "total_amount": "NaN",
+                    "category": "Groceries",
+                },
+                {"error": "Total amount must be a valid number greater than 0."},
+            ),
+            (
+                {
+                    "merchant": "Trader Joe's",
+                    "transaction_date": "2026-04-23",
+                    "total_amount": "Infinity",
+                    "category": "Groceries",
+                },
+                {"error": "Total amount must be a valid number greater than 0."},
+            ),
+            (
+                {
+                    "merchant": "Trader Joe's",
+                    "transaction_date": "2026-04-23",
                     "total_amount": 0,
                     "category": "Groceries",
                 },
@@ -1086,6 +1105,24 @@ class AppRouteTests(unittest.TestCase):
         self.assertEqual(payload["receipts"][0]["behavior_note"], "Receipt upload does not exist.")
         self.assertNotIn("id", payload["receipts"][0])
         self.assertEqual(payload["receipts"][1]["status"], "error")
+
+    def test_receipt_upload_converts_real_storage_exceptions_into_error_cards(self):
+        self._signup_and_login()
+
+        with patch.object(self.app.config["storage"], "save_receipt_extraction", side_effect=sqlite3.OperationalError("db locked")):
+            response = self.client.post(
+                "/api/upload-receipts",
+                data={"receipts": [(io.BytesIO(b"fake image"), "receipt-1.jpg")]},
+                content_type="multipart/form-data",
+            )
+
+        payload = response.get_json()
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(len(payload["receipts"]), 1)
+        self.assertEqual(payload["receipts"][0]["status"], "error")
+        self.assertEqual(payload["receipts"][0]["behavior_note"], "db locked")
+        self.assertNotIn("id", payload["receipts"][0])
 
     def test_readme_mentions_web_service_flow_and_public_demo_risk(self):
         readme = Path("README.md").read_text(encoding="utf-8")
