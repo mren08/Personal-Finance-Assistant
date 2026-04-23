@@ -433,13 +433,18 @@ class Storage:
                 """,
                 (user_id,),
             ).fetchall()
-        pending_receipts = []
-        for row in rows:
-            item = dict(row)
-            item["total_amount"] = round(float(item["total_amount"]), 2)
-            item["category_confidence"] = round(float(item["category_confidence"]), 2)
-            pending_receipts.append(item)
-        return pending_receipts
+        return [self._receipt_extraction_from_row(row) for row in rows]
+
+    @staticmethod
+    def _receipt_extraction_from_row(row: sqlite3.Row) -> dict[str, Any]:
+        item = dict(row)
+        item["total_amount"] = round(float(item["total_amount"]), 2)
+        item["category_confidence"] = round(float(item["category_confidence"]), 2)
+        try:
+            item["item_tags"] = json.loads(item.get("item_tags_json") or "[]")
+        except json.JSONDecodeError:
+            item["item_tags"] = []
+        return item
 
     def approve_receipt_extraction(
         self,

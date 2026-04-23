@@ -6,8 +6,10 @@ import re
 import tempfile
 from collections import defaultdict
 from datetime import UTC, datetime
+from typing import Any
 
 from flask import Flask, current_app, jsonify, redirect, render_template, request, session, url_for
+from werkzeug.utils import secure_filename
 
 from agent_service import AgentService, FALLBACK_REPLY, build_openai_llm_client
 from coach import OverspendingCoach
@@ -723,6 +725,27 @@ def _parse_budget_caps(raw_json: str, defaults: dict[str, float]) -> dict[str, f
     return caps
 
 
+def extract_receipt_batch(files: list[Any], storage: Storage, user_id: int) -> list[dict[str, Any]]:
+    results: list[dict[str, Any]] = []
+    for uploaded_file in files:
+        filename = secure_filename(uploaded_file.filename or "receipt.jpg") or "receipt.jpg"
+        receipt_upload_id = storage.create_receipt_upload(user_id, filename, f"uploads/{filename}")
+        results.append(
+            {
+                "receipt_upload_id": receipt_upload_id,
+                "merchant": "",
+                "transaction_date": "",
+                "total_amount": 0.0,
+                "category": "",
+                "category_confidence": 0.0,
+                "status": "needs_correction",
+                "behavior_note": "",
+                "item_tags": [],
+            }
+        )
+    return results
+
+
 def create_app() -> Flask:
     app = Flask(__name__)
     app.secret_key = os.getenv("SECRET_KEY", "dev-secret")
@@ -1164,6 +1187,81 @@ def create_app() -> Flask:
         finally:
             if os.path.exists(temp_path):
                 os.unlink(temp_path)
+
+    @app.route("/api/upload-receipts", methods=["POST"])
+    def upload_receipts():
+        try:
+            user_id = require_user_id()
+        except PermissionError as exc:
+            return jsonify({"error": str(exc)}), 401
+
+        files = [item for item in request.files.getlist("receipts") if (item.filename or "").strip()]
+        if not files:
+            return jsonify({"error": "Missing receipt image input named 'receipts'."}), 400
+
+        extracted_cards = extract_receipt_batch(files, get_storage(), user_id)
+        saved_cards: list[dict[str, Any]] = []
+        for card in extracted_cards:
+            if card.get("status") == "error":
+                saved_cards.append(card)
+                continue
+            try:
+                extraction_id = get_storage().save_receipt_extraction(
+                    user_id,
+                    receipt_upload_id=int(card["receipt_upload_id"]),
+                    merchant=str(card.get("merchant") or ""),
+                    transaction_date=str(card.get("transaction_date") or ""),
+                    total_amount=float(card.get("total_amount") or 0),
+                    category=str(card.get("category") or ""),
+                    category_confidence=float(card.get("category_confidence") or 0),
+                    status=str(card.get("status") or "needs_correction"),
+                    behavior_note=str(card.get("behavior_note") or ""),
+                    item_tags_json=json.dumps(card.get("item_tags") or []),
+                    raw_extraction_json=json.dumps({}),
+                    web_enrichment_json=json.dumps({}),
+                )
+            except ValueError:
+                saved_cards.append(card)
+                continue
+            saved_cards.append({**card, "id": extraction_id})
+        return jsonify({"receipts": saved_cards}), 200
+
+    @app.route("/api/receipts/<int:extraction_id>/approve", methods=["POST"])
+    def approve_receipt(extraction_id: int):
+        try:
+            user_id = require_user_id()
+        except PermissionError as exc:
+            return jsonify({"error": str(exc)}), 401
+
+        payload = request.get_json(silent=True) or {}
+        category = str(payload.get("category") or "").strip()
+        if not category:
+            return jsonify({"error": "Choose a category before saving this receipt."}), 400
+
+        try:
+            transaction_id = get_storage().approve_receipt_extraction(
+                user_id,
+                extraction_id,
+                merchant=str(payload.get("merchant") or ""),
+                transaction_date=str(payload.get("transaction_date") or ""),
+                total_amount=float(payload.get("total_amount") or 0),
+                category=category,
+            )
+        except ValueError as exc:
+            return jsonify({"error": str(exc)}), 400
+
+        profile = refresh_user_summary(user_id, payload.get("month"))
+        return jsonify({"transaction_id": transaction_id, "profile": profile}), 200
+
+    @app.route("/api/receipts/<int:extraction_id>/discard", methods=["POST"])
+    def discard_receipt(extraction_id: int):
+        try:
+            user_id = require_user_id()
+        except PermissionError as exc:
+            return jsonify({"error": str(exc)}), 401
+
+        get_storage().discard_receipt_extraction(user_id, extraction_id)
+        return jsonify({"ok": True}), 200
 
     @app.route("/api/chat", methods=["POST"])
     def chat():

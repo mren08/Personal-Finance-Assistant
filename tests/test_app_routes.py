@@ -886,6 +886,113 @@ class AppRouteTests(unittest.TestCase):
             {"error": "Please choose a CSV file before submitting."},
         )
 
+    def test_receipt_upload_creates_multiple_review_cards(self):
+        self._signup_and_login()
+
+        response = self.client.post(
+            "/api/upload-receipts",
+            data={
+                "receipts": [
+                    (io.BytesIO(b"fake image 1"), "receipt-1.jpg"),
+                    (io.BytesIO(b"fake image 2"), "receipt-2.jpg"),
+                ]
+            },
+            content_type="multipart/form-data",
+        )
+
+        payload = response.get_json()
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("receipts", payload)
+        self.assertEqual(len(payload["receipts"]), 2)
+        self.assertEqual(payload["receipts"][0]["status"], "needs_correction")
+        self.assertEqual(payload["receipts"][1]["status"], "needs_correction")
+        self.assertIn("id", payload["receipts"][0])
+        self.assertIn("id", payload["receipts"][1])
+
+    def test_receipt_review_blocks_save_when_category_needs_user_choice(self):
+        self._signup_and_login()
+        storage = self.app.config["storage"]
+        user_id = storage.authenticate_user("demo@example.com", "secret123")
+        receipt_upload_id = storage.create_receipt_upload(user_id, "receipt-review.jpg", "uploads/receipt-review.jpg")
+        extraction_id = storage.save_receipt_extraction(
+            user_id,
+            receipt_upload_id=receipt_upload_id,
+            merchant="Trader Joe's",
+            transaction_date="2026-04-23",
+            total_amount=48.22,
+            category="",
+            category_confidence=0.0,
+            status="needs_category",
+            behavior_note="",
+            item_tags_json="[]",
+            raw_extraction_json="{}",
+            web_enrichment_json="{}",
+        )
+
+        response = self.client.post(
+            f"/api/receipts/{extraction_id}/approve",
+            json={
+                "merchant": "Trader Joe's",
+                "transaction_date": "2026-04-23",
+                "total_amount": 48.22,
+                "category": "   ",
+            },
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(
+            response.get_json(),
+            {"error": "Choose a category before saving this receipt."},
+        )
+
+    def test_receipt_upload_keeps_one_failed_receipt_from_blocking_batch(self):
+        self._signup_and_login()
+
+        with patch("app.extract_receipt_batch") as extract_receipt_batch:
+            extract_receipt_batch.return_value = [
+                {
+                    "receipt_upload_id": 101,
+                    "merchant": "Sweetgreen",
+                    "transaction_date": "2026-04-23",
+                    "total_amount": 18.5,
+                    "category": "Dining",
+                    "category_confidence": 0.91,
+                    "status": "ready",
+                    "behavior_note": "",
+                    "item_tags": ["lunch"],
+                },
+                {
+                    "receipt_upload_id": 102,
+                    "merchant": "",
+                    "transaction_date": "",
+                    "total_amount": 0.0,
+                    "category": "",
+                    "category_confidence": 0.0,
+                    "status": "error",
+                    "behavior_note": "Could not read receipt.",
+                    "item_tags": [],
+                },
+            ]
+
+            response = self.client.post(
+                "/api/upload-receipts",
+                data={
+                    "receipts": [
+                        (io.BytesIO(b"fake image 1"), "receipt-1.jpg"),
+                        (io.BytesIO(b"fake image 2"), "receipt-2.jpg"),
+                    ]
+                },
+                content_type="multipart/form-data",
+            )
+
+        payload = response.get_json()
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(len(payload["receipts"]), 2)
+        self.assertEqual(payload["receipts"][0]["status"], "ready")
+        self.assertEqual(payload["receipts"][1]["status"], "error")
+
     def test_readme_mentions_web_service_flow_and_public_demo_risk(self):
         readme = Path("README.md").read_text(encoding="utf-8")
 
