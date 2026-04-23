@@ -332,6 +332,9 @@ class Storage:
     def _normalize_merchant_key(merchant_key: str) -> str:
         return merchant_key.strip().lower()
 
+    def normalize_merchant_key(self, merchant_key: str) -> str:
+        return self._normalize_merchant_key(merchant_key)
+
     def create_receipt_upload(self, user_id: int, filename: str, storage_path: str) -> int:
         with self._connect() as conn:
             cursor = conn.execute(

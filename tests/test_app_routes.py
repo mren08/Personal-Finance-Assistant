@@ -1159,6 +1159,92 @@ class AppRouteTests(unittest.TestCase):
         self.assertEqual(payload["receipts"][1]["status"], "needs_correction")
         self.assertIn("id", payload["receipts"][1])
 
+    def test_receipt_upload_reuses_cached_merchant_category_before_web_lookup(self):
+        self._signup_and_login()
+        self.app.config["storage"].save_cached_merchant_category("trader joes", "Groceries", 0.97, "cache")
+
+        with patch("app.extract_receipt_batch") as extract_receipt_batch, patch(
+            "app.enrich_merchant_category_from_web",
+            create=True,
+        ) as enrich_merchant_category_from_web:
+            extract_receipt_batch.return_value = [
+                {
+                    "receipt_upload_id": self.app.config["storage"].create_receipt_upload(
+                        1,
+                        "receipt-1.jpg",
+                        "uploads/receipt-1.jpg",
+                    ),
+                    "merchant": "Trader Joes",
+                    "transaction_date": "2026-04-23",
+                    "total_amount": 48.22,
+                    "category": "",
+                    "category_confidence": 0.0,
+                    "status": "needs_correction",
+                    "behavior_note": "",
+                    "item_tags": ["groceries"],
+                }
+            ]
+
+            response = self.client.post(
+                "/api/upload-receipts",
+                data={"receipts": [(io.BytesIO(b"fake image"), "receipt-1.jpg")]},
+                content_type="multipart/form-data",
+            )
+
+        payload = response.get_json()
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(len(payload["receipts"]), 1)
+        self.assertEqual(payload["receipts"][0]["category"], "Groceries")
+        self.assertEqual(payload["receipts"][0]["category_confidence"], 0.97)
+        self.assertEqual(payload["receipts"][0]["status"], "ready")
+        enrich_merchant_category_from_web.assert_not_called()
+
+    def test_receipt_upload_marks_card_needs_category_when_web_lookup_stays_low_confidence(self):
+        self._signup_and_login()
+
+        with patch("app.extract_receipt_batch") as extract_receipt_batch, patch(
+            "app.enrich_merchant_category_from_web",
+            create=True,
+        ) as enrich_merchant_category_from_web:
+            extract_receipt_batch.return_value = [
+                {
+                    "receipt_upload_id": self.app.config["storage"].create_receipt_upload(
+                        1,
+                        "receipt-2.jpg",
+                        "uploads/receipt-2.jpg",
+                    ),
+                    "merchant": "Unknown Corner Shop",
+                    "transaction_date": "2026-04-23",
+                    "total_amount": 19.45,
+                    "category": "",
+                    "category_confidence": 0.0,
+                    "status": "needs_correction",
+                    "behavior_note": "",
+                    "item_tags": [],
+                }
+            ]
+            enrich_merchant_category_from_web.return_value = {
+                "category": "",
+                "confidence": 0.31,
+                "source": "web",
+            }
+
+            response = self.client.post(
+                "/api/upload-receipts",
+                data={"receipts": [(io.BytesIO(b"fake image"), "receipt-2.jpg")]},
+                content_type="multipart/form-data",
+            )
+
+        payload = response.get_json()
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(len(payload["receipts"]), 1)
+        self.assertEqual(payload["receipts"][0]["category"], "")
+        self.assertEqual(payload["receipts"][0]["status"], "needs_category")
+        self.assertEqual(payload["receipts"][0]["category_confidence"], 0.0)
+        enrich_merchant_category_from_web.assert_called_once_with("Unknown Corner Shop")
+
     def test_readme_mentions_web_service_flow_and_public_demo_risk(self):
         readme = Path("README.md").read_text(encoding="utf-8")
 

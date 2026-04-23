@@ -762,6 +762,96 @@ def extract_receipt_batch(files: list[Any], storage: Storage, user_id: int) -> l
     return results
 
 
+_RECEIPT_CATEGORY_READY_CONFIDENCE = 0.85
+
+
+def _infer_local_receipt_category(merchant: str, receipt_text: str = "") -> dict[str, Any]:
+    hints = " ".join(part for part in [merchant, receipt_text] if part).lower()
+    rules: tuple[tuple[str, str, float], ...] = (
+        (r"\b(trader joe'?s|whole foods|aldi|costco|kroger|publix|safeway)\b", "Groceries", 0.96),
+        (r"\b(starbucks|chipotle|sweetgreen|mcdonald'?s|restaurant|pizza|sushi|coffee|cafe)\b", "Dining", 0.9),
+        (r"\b(shell|chevron|exxon|bp|uber|lyft|delta)\b", "Travel", 0.89),
+        (r"\b(netflix|spotify|hulu|disney\+|apple\.com\/bill)\b", "Subscriptions", 0.93),
+        (r"\b(pilates|gym|fitness|yoga)\b", "Wellness", 0.88),
+    )
+    for pattern, category, confidence in rules:
+        if re.search(pattern, hints):
+            return {
+                "category": category,
+                "confidence": confidence,
+                "source": "local_rule",
+                "web_enrichment": {},
+            }
+    return {"category": "", "confidence": 0.0, "source": "manual", "web_enrichment": {}}
+
+
+def enrich_merchant_category_from_web(merchant: str) -> dict[str, Any]:
+    return {"category": "", "confidence": 0.0, "source": "web"}
+
+
+def resolve_receipt_category(storage: Storage, merchant: str, receipt_text: str = "") -> dict[str, Any]:
+    merchant_key = storage.normalize_merchant_key(merchant)
+    unresolved = {
+        "merchant_key": merchant_key,
+        "category": "",
+        "confidence": 0.0,
+        "source": "manual",
+        "web_enrichment": {},
+    }
+    if not merchant_key:
+        return unresolved
+
+    cached = storage.get_cached_merchant_category(merchant_key)
+    if cached and str(cached.get("category") or "").strip():
+        cached_confidence = float(cached.get("confidence") or 0.0)
+        if cached_confidence >= _RECEIPT_CATEGORY_READY_CONFIDENCE:
+            return {
+                "merchant_key": merchant_key,
+                "category": str(cached["category"]).strip(),
+                "confidence": round(cached_confidence, 2),
+                "source": str(cached.get("enrichment_source") or "cache"),
+                "web_enrichment": {},
+            }
+
+    local_match = _infer_local_receipt_category(merchant, receipt_text)
+    if local_match["category"] and float(local_match["confidence"]) >= _RECEIPT_CATEGORY_READY_CONFIDENCE:
+        storage.save_cached_merchant_category(
+            merchant_key,
+            str(local_match["category"]),
+            float(local_match["confidence"]),
+            str(local_match["source"]),
+        )
+        return {
+            "merchant_key": merchant_key,
+            "category": str(local_match["category"]),
+            "confidence": round(float(local_match["confidence"]), 2),
+            "source": str(local_match["source"]),
+            "web_enrichment": {},
+        }
+
+    web_match = enrich_merchant_category_from_web(merchant)
+    web_category = str(web_match.get("category") or "").strip()
+    web_confidence = round(float(web_match.get("confidence") or 0.0), 2)
+    web_source = str(web_match.get("source") or "web")
+    if web_category and web_confidence >= _RECEIPT_CATEGORY_READY_CONFIDENCE:
+        storage.save_cached_merchant_category(merchant_key, web_category, web_confidence, web_source)
+        return {
+            "merchant_key": merchant_key,
+            "category": web_category,
+            "confidence": web_confidence,
+            "source": web_source,
+            "web_enrichment": web_match,
+        }
+
+    return {
+        "merchant_key": merchant_key,
+        "category": "",
+        "confidence": 0.0,
+        "source": "manual",
+        "web_enrichment": web_match if isinstance(web_match, dict) else {},
+    }
+
+
 def _validate_receipt_review_payload(payload: dict[str, Any]) -> tuple[str, str, float, str]:
     merchant = str(payload.get("merchant") or "").strip()
     if not merchant:
@@ -1248,20 +1338,39 @@ def create_app() -> Flask:
             if card.get("status") == "error":
                 saved_cards.append(card)
                 continue
+            storage = get_storage()
+            receipt_text = " ".join(str(tag).strip() for tag in (card.get("item_tags") or []) if str(tag).strip())
+            resolved_category = resolve_receipt_category(
+                storage,
+                str(card.get("merchant") or ""),
+                receipt_text=receipt_text,
+            )
+            merchant = str(card.get("merchant") or "").strip()
+            category = str(card.get("category") or "").strip()
+            category_confidence = round(float(card.get("category_confidence") or 0.0), 2)
+            status = str(card.get("status") or "needs_correction")
+            if category_confidence < _RECEIPT_CATEGORY_READY_CONFIDENCE:
+                if resolved_category["category"]:
+                    category = str(resolved_category["category"])
+                    category_confidence = round(float(resolved_category["confidence"]), 2)
+                    status = "ready"
+                elif merchant and not category:
+                    category_confidence = 0.0
+                    status = "needs_category"
             try:
-                extraction_id = get_storage().save_receipt_extraction(
+                extraction_id = storage.save_receipt_extraction(
                     user_id,
                     receipt_upload_id=int(card["receipt_upload_id"]),
-                    merchant=str(card.get("merchant") or ""),
+                    merchant=merchant,
                     transaction_date=str(card.get("transaction_date") or ""),
                     total_amount=float(card.get("total_amount") or 0),
-                    category=str(card.get("category") or ""),
-                    category_confidence=float(card.get("category_confidence") or 0),
-                    status=str(card.get("status") or "needs_correction"),
+                    category=category,
+                    category_confidence=category_confidence,
+                    status=status,
                     behavior_note=str(card.get("behavior_note") or ""),
                     item_tags_json=json.dumps(card.get("item_tags") or []),
                     raw_extraction_json=json.dumps({}),
-                    web_enrichment_json=json.dumps({}),
+                    web_enrichment_json=json.dumps(resolved_category.get("web_enrichment") or {}),
                 )
             except Exception as exc:
                 saved_cards.append(
@@ -1272,7 +1381,15 @@ def create_app() -> Flask:
                     }
                 )
                 continue
-            saved_cards.append({**card, "id": extraction_id})
+            saved_cards.append(
+                {
+                    **card,
+                    "id": extraction_id,
+                    "category": category,
+                    "category_confidence": category_confidence,
+                    "status": status,
+                }
+            )
         return jsonify({"receipts": saved_cards}), 200
 
     @app.route("/api/receipts/<int:extraction_id>/approve", methods=["POST"])
