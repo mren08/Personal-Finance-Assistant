@@ -148,7 +148,7 @@ class Storage:
 
                 CREATE TABLE IF NOT EXISTS receipt_transaction_links (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    receipt_extraction_id INTEGER NOT NULL REFERENCES receipt_extractions(id) ON DELETE CASCADE,
+                    receipt_extraction_id INTEGER NOT NULL UNIQUE REFERENCES receipt_extractions(id) ON DELETE CASCADE,
                     transaction_id INTEGER NOT NULL REFERENCES transactions(id) ON DELETE CASCADE,
                     created_at TEXT DEFAULT CURRENT_TIMESTAMP
                 );
@@ -389,19 +389,7 @@ class Storage:
         category: str,
     ) -> int:
         with self._connect() as conn:
-            row = conn.execute(
-                """
-                SELECT id, status, receipt_upload_id
-                FROM receipt_extractions
-                WHERE id = ? AND user_id = ?
-                """,
-                (extraction_id, user_id),
-            ).fetchone()
-            if not row:
-                raise ValueError("No receipt extraction found for that user.")
-            if row["status"] not in {"ready", "needs_category"}:
-                raise ValueError("Receipt extraction is not pending review.")
-            conn.execute(
+            cursor = conn.execute(
                 """
                 UPDATE receipt_extractions
                 SET merchant = ?,
@@ -410,7 +398,7 @@ class Storage:
                     category = ?,
                     status = ?,
                     reviewed_at = CURRENT_TIMESTAMP
-                WHERE id = ? AND user_id = ?
+                WHERE id = ? AND user_id = ? AND status IN ('ready', 'needs_category')
                 """,
                 (
                     merchant,
@@ -422,6 +410,20 @@ class Storage:
                     user_id,
                 ),
             )
+            if cursor.rowcount == 0:
+                exists = conn.execute(
+                    """
+                    SELECT status
+                    FROM receipt_extractions
+                    WHERE id = ? AND user_id = ?
+                    """,
+                    (extraction_id, user_id),
+                ).fetchone()
+                if not exists:
+                    raise ValueError("No receipt extraction found for that user.")
+                if exists["status"] in {"approved", "discarded"}:
+                    raise ValueError("Receipt extraction has already been finalized.")
+                raise ValueError("Receipt extraction is not pending review.")
 
             transaction_id = self._insert_transaction_row(
                 conn,
@@ -434,13 +436,16 @@ class Storage:
                     "source": "receipt",
                 },
             )
-            conn.execute(
-                """
-                INSERT INTO receipt_transaction_links (receipt_extraction_id, transaction_id)
-                VALUES (?, ?)
-                """,
-                (extraction_id, transaction_id),
-            )
+            try:
+                conn.execute(
+                    """
+                    INSERT INTO receipt_transaction_links (receipt_extraction_id, transaction_id)
+                    VALUES (?, ?)
+                    """,
+                    (extraction_id, transaction_id),
+                )
+            except sqlite3.IntegrityError as exc:
+                raise RuntimeError("Receipt extraction is already linked to a transaction.") from exc
             return transaction_id
 
     def discard_receipt_extraction(self, user_id: int, extraction_id: int) -> None:

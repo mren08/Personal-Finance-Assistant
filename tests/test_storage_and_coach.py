@@ -180,6 +180,16 @@ class StorageTests(unittest.TestCase):
                     category="Dining",
                 )
 
+            with storage._connect() as conn:
+                with self.assertRaises(sqlite3.IntegrityError):
+                    conn.execute(
+                        """
+                        INSERT INTO receipt_transaction_links (receipt_extraction_id, transaction_id)
+                        VALUES (?, ?)
+                        """,
+                        (approved_extraction_id, storage.get_receipt_transaction_link(approved_extraction_id)["transaction_id"]),
+                    )
+
             discarded_upload_id = storage.create_receipt_upload(user_id, "receipt-5.jpg", "uploads/receipt-5.jpg")
             discarded_extraction_id = storage.save_receipt_extraction(
                 user_id,
