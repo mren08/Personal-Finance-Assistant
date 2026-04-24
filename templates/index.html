@@ -498,18 +498,19 @@
               <button type="submit">Create account</button>
             </form>
           </div>
-          <p class="small" style="margin:12px 0 8px;">Forgot password?</p>
-          <form class="form-stack" method="post" action="/forgot-password">
-            <div>
-              <label for="forgot-email">Email</label>
-              <input id="forgot-email" name="email" type="email" required>
-            </div>
-            <div>
-              <label for="forgot-password">New password</label>
-              <input id="forgot-password" name="new_password" type="password" required>
-            </div>
-            <button class="secondary" type="submit">Reset password</button>
-          </form>
+          <p class="small" style="margin:12px 0 8px;">
+            Forgot password?
+            <a href="#forgot-password-panel" id="forgot-password-toggle" class="auth-link">Reset it here</a>
+          </p>
+          <div class="auth-panel" id="forgot-password-panel" {% if auth_mode != "forgot_password" %}hidden{% endif %}>
+            <form class="form-stack" method="post" action="/forgot-password">
+              <div>
+                <label for="forgot-email">Email</label>
+                <input id="forgot-email" name="email" type="email" required>
+              </div>
+              <button class="secondary" type="submit">Send reset link</button>
+            </form>
+          </div>
         </div>
       </section>
     {% else %}
@@ -871,11 +872,25 @@
     <script>
       const signupToggle = document.getElementById("signup-toggle");
       const signupPanel = document.getElementById("signup-panel");
+      const forgotPasswordToggle = document.getElementById("forgot-password-toggle");
+      const forgotPasswordPanel = document.getElementById("forgot-password-panel");
+
       if (signupToggle && signupPanel) {
         signupToggle.addEventListener("click", (event) => {
           event.preventDefault();
           signupPanel.hidden = false;
           const emailInput = document.getElementById("signup-email");
+          if (emailInput) {
+            emailInput.focus();
+          }
+        });
+      }
+
+      if (forgotPasswordToggle && forgotPasswordPanel) {
+        forgotPasswordToggle.addEventListener("click", (event) => {
+          event.preventDefault();
+          forgotPasswordPanel.hidden = false;
+          const emailInput = document.getElementById("forgot-email");
           if (emailInput) {
             emailInput.focus();
           }

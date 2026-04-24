@@ -16,6 +16,7 @@ from agent_service import AgentService, FALLBACK_REPLY, build_openai_llm_client
 from coach import OverspendingCoach
 from csv_parser import CategorizedTransaction, StatementCsvParser
 from financial_state import build_monthly_summary
+from mailer import build_password_reset_mailer
 from recurrence import RecurringExpenseAnalyzer
 from recommender import BudgetRecommender
 from storage import Storage
@@ -888,6 +889,7 @@ def create_app() -> Flask:
     app.secret_key = os.getenv("SECRET_KEY", "dev-secret")
     app.config["storage"] = Storage(os.getenv("APP_DB_PATH", "budget_app.db"))
     app.config["coach"] = OverspendingCoach()
+    app.config["password_reset_mailer"] = build_password_reset_mailer(app)
 
     def get_storage() -> Storage:
         return current_app.config["storage"]
@@ -1130,10 +1132,7 @@ def create_app() -> Flask:
     @app.route("/forgot-password", methods=["POST"])
     def forgot_password():
         email = request.form.get("email", "").strip()
-        new_password = request.form.get("new_password", "")
-        try:
-            get_storage().update_password(email, new_password)
-        except ValueError as exc:
+        if not email:
             return (
                 render_template(
                     "index.html",
@@ -1142,11 +1141,63 @@ def create_app() -> Flask:
                     user=None,
                     profile=None,
                     auth_notice=None,
-                    auth_error=str(exc),
-                    auth_mode="login",
+                    auth_error="Email is required.",
+                    auth_mode="forgot_password",
                 ),
                 400,
             )
+        payload = get_storage().create_password_reset_token(email)
+        if payload:
+            reset_url = url_for("reset_password", token=payload["token"], _external=False)
+            current_app.config["password_reset_mailer"].send_password_reset_email(payload["email"], reset_url)
+        session["auth_notice"] = "If that account exists, a reset link has been sent."
+        return redirect(url_for("index"))
+
+    @app.route("/reset-password/<token>", methods=["GET", "POST"])
+    def reset_password(token: str):
+        token_record = get_storage().get_password_reset_token(token)
+        if not token_record:
+            return (
+                render_template(
+                    "reset_password.html",
+                    token_valid=False,
+                    token=token,
+                    error="Reset link is invalid or expired.",
+                ),
+                400,
+            )
+
+        if request.method == "GET":
+            return render_template(
+                "reset_password.html",
+                token_valid=True,
+                token=token,
+            )
+
+        new_password = request.form.get("new_password", "")
+        confirm_password = request.form.get("confirm_password", "")
+        if not new_password:
+            return (
+                render_template(
+                    "reset_password.html",
+                    token_valid=True,
+                    token=token,
+                    error="New password is required.",
+                ),
+                400,
+            )
+        if new_password != confirm_password:
+            return (
+                render_template(
+                    "reset_password.html",
+                    token_valid=True,
+                    token=token,
+                    error="Passwords do not match.",
+                ),
+                400,
+            )
+
+        get_storage().reset_password_with_token(token, new_password)
         session["auth_notice"] = "Password updated. Sign in with your new password."
         return redirect(url_for("index"))
 

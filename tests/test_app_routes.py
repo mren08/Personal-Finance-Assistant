@@ -5,7 +5,7 @@ import tempfile
 import unittest
 from datetime import UTC, datetime
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 import app as app_module
 
@@ -66,6 +66,7 @@ class AppRouteTests(unittest.TestCase):
         os.environ["APP_DB_PATH"] = f"{self.temp_dir.name}/test.db"
         os.environ["SECRET_KEY"] = "test-secret"
         self.app = app_module.create_app()
+        self.app.config["password_reset_mailer"] = Mock()
         self.client = self.app.test_client()
 
     def _signup_and_login(self, follow_redirects: bool = False):
@@ -165,12 +166,62 @@ class AppRouteTests(unittest.TestCase):
         self.assertEqual(response.status_code, 401)
         self.assertIn(b"Invalid email or password.", response.data)
 
-    def test_forgot_password_updates_password_and_shows_notice(self):
+    def test_forgot_password_returns_neutral_notice_for_existing_email(self):
         self.client.post("/signup", data={"email": "demo@example.com", "password": "secret123"})
 
+        with patch.object(self.app.config["storage"], "create_password_reset_token", return_value={"email": "demo@example.com", "token": "token-123", "user_id": 1, "expires_in_minutes": 30}):
+            reset_response = self.client.post(
+                "/forgot-password",
+                data={"email": "demo@example.com"},
+                follow_redirects=True,
+            )
+
+        self.assertEqual(reset_response.status_code, 200)
+        self.assertIn(b"If that account exists, a reset link has been sent.", reset_response.data)
+        self.app.config["password_reset_mailer"].send_password_reset_email.assert_called_once_with(
+            "demo@example.com",
+            "/reset-password/token-123",
+        )
+
+    def test_forgot_password_returns_same_notice_for_missing_email(self):
+        with patch.object(self.app.config["storage"], "create_password_reset_token", return_value=None):
+            response = self.client.post(
+                "/forgot-password",
+                data={"email": "missing@example.com"},
+                follow_redirects=True,
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(b"If that account exists, a reset link has been sent.", response.data)
+        self.app.config["password_reset_mailer"].send_password_reset_email.assert_not_called()
+
+    def test_valid_reset_token_renders_reset_password_page(self):
+        self.app.config["storage"].create_user("demo@example.com", "secret123")
+        payload = self.app.config["storage"].create_password_reset_token("demo@example.com")
+
+        response = self.client.get(f"/reset-password/{payload['token']}")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(b'name="new_password"', response.data)
+        self.assertIn(b'name="confirm_password"', response.data)
+        self.assertIn(payload["token"].encode("utf-8"), response.data)
+        self.assertIn(b'method="post"', response.data)
+
+    def test_invalid_reset_token_shows_error_state(self):
+        response = self.client.get("/reset-password/not-a-real-token")
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn(b"Reset link is invalid or expired.", response.data)
+        self.assertNotIn(b'name="new_password"', response.data)
+        self.assertNotIn(b'name="confirm_password"', response.data)
+
+    def test_reset_password_submission_updates_password_and_redirects_to_homepage(self):
+        self.app.config["storage"].create_user("demo@example.com", "secret123")
+        payload = self.app.config["storage"].create_password_reset_token("demo@example.com")
+
         reset_response = self.client.post(
-            "/forgot-password",
-            data={"email": "demo@example.com", "new_password": "newsecret456"},
+            f"/reset-password/{payload['token']}",
+            data={"new_password": "newsecret456", "confirm_password": "newsecret456"},
             follow_redirects=True,
         )
         login_response = self.client.post(
@@ -183,6 +234,31 @@ class AppRouteTests(unittest.TestCase):
         self.assertIn(b"Password updated. Sign in with your new password.", reset_response.data)
         self.assertEqual(login_response.status_code, 200)
         self.assertIn(b"AI Chatbot", login_response.data)
+
+    def test_reset_password_submission_rejects_mismatched_passwords(self):
+        self.app.config["storage"].create_user("demo@example.com", "secret123")
+        payload = self.app.config["storage"].create_password_reset_token("demo@example.com")
+
+        response = self.client.post(
+            f"/reset-password/{payload['token']}",
+            data={"new_password": "newsecret456", "confirm_password": "different789"},
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn(b"Passwords do not match.", response.data)
+        self.assertIn(b'name="new_password"', response.data)
+        self.assertIn(b'name="confirm_password"', response.data)
+
+    def test_reset_password_submission_rejects_invalid_token(self):
+        response = self.client.post(
+            "/reset-password/not-a-real-token",
+            data={"new_password": "newsecret456", "confirm_password": "newsecret456"},
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn(b"Reset link is invalid or expired.", response.data)
+        self.assertNotIn(b'name="new_password"', response.data)
+        self.assertNotIn(b'name="confirm_password"', response.data)
 
     def test_upload_persists_transactions_for_logged_in_user(self):
         self._signup_and_login()
@@ -1079,15 +1155,18 @@ class AppRouteTests(unittest.TestCase):
         self.assertIn(b"data-tooltip=", response.data)
         self.assertIn(b"chart-tooltip", response.data)
 
-    def test_logged_out_homepage_shows_forgot_password_form(self):
+    def test_logged_out_homepage_hides_forgot_password_form_until_requested(self):
         response = self.client.get("/")
 
         self.assertEqual(response.status_code, 200)
         self.assertIn(b"Forgot password?", response.data)
+        self.assertIn(b"Reset it here", response.data)
         self.assertIn(b"/forgot-password", response.data)
         self.assertIn(b"No account?", response.data)
         self.assertIn(b"Create one now", response.data)
         self.assertIn(b'id="signup-panel" hidden', response.data)
+        self.assertIn(b'id="forgot-password-panel" hidden', response.data)
+        self.assertNotIn(b'name="new_password"', response.data)
 
     def test_signup_error_reopens_create_account_panel(self):
         self.client.post("/signup", data={"email": "demo@example.com", "password": "secret123"})
@@ -1102,6 +1181,18 @@ class AppRouteTests(unittest.TestCase):
         self.assertIn(b"An account with that email already exists.", response.data)
         self.assertIn(b'id="signup-panel"', response.data)
         self.assertNotIn(b'id="signup-panel" hidden', response.data)
+
+    def test_forgot_password_error_reopens_reset_panel(self):
+        response = self.client.post(
+            "/forgot-password",
+            data={"email": ""},
+            follow_redirects=True,
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn(b"Email is required.", response.data)
+        self.assertIn(b'id="forgot-password-panel"', response.data)
+        self.assertNotIn(b'id="forgot-password-panel" hidden', response.data)
 
     def test_dashboard_shows_top_three_insights_for_selected_month(self):
         self._signup_and_login()
@@ -1732,6 +1823,13 @@ class AppRouteTests(unittest.TestCase):
         self.assertIn("monthly income", readme.lower())
         self.assertIn("fixed expenses", readme.lower())
         self.assertIn("agent notes", readme.lower())
+
+    def test_readme_mentions_password_reset_flow(self):
+        readme = Path("README.md").read_text(encoding="utf-8").lower()
+
+        self.assertIn("forgot password", readme)
+        self.assertIn("reset link", readme)
+        self.assertIn("logging mailer", readme)
 
 
 if __name__ == "__main__":

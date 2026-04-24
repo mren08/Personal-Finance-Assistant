@@ -56,6 +56,14 @@ This version is built as an overspending coach rather than a generic budgeting d
 The chat is intentionally blunt. It is meant to act like an accountability partner, not a neutral assistant.
 The monthly plan form lets users save monthly income and fixed expenses so the app can compute what is actually left this month.
 
+## Password Reset
+
+From the homepage, the `Forgot password?` link asks for an email address only.
+
+If that account exists, the app creates a short-lived reset link and sends it through the current mailer.
+
+When no real provider is configured, the app uses a logging mailer fallback, which writes the reset link to the app logs instead of sending a live email.
+
 ## Deploy on Render
 
 1. Push the project to GitHub.
