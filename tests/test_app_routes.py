@@ -417,6 +417,127 @@ class AppRouteTests(unittest.TestCase):
             payload["profile"]["top_insights"],
         )
 
+    def test_approved_receipt_behavior_note_promotes_without_client_month(self):
+        self._signup_and_login()
+        self.client.post(
+            "/api/profile",
+            json={
+                "month": "2026-04",
+                "monthly_income": 3000,
+                "fixed_expenses": 500,
+                "budgeting_goal": "Save 500 for a trip",
+            },
+        )
+
+        storage = self.app.config["storage"]
+        receipt_upload_id = storage.create_receipt_upload(1, "sweetgreen.jpg", "uploads/sweetgreen.jpg")
+        extraction_id = storage.save_receipt_extraction(
+            1,
+            receipt_upload_id=receipt_upload_id,
+            merchant="Sweetgreen",
+            transaction_date="2026-04-23",
+            total_amount=18.50,
+            category="Dining",
+            category_confidence=0.94,
+            status="ready",
+            behavior_note="This is your 5th dining expense this week.",
+            item_tags_json='["salad"]',
+            raw_extraction_json="{}",
+            web_enrichment_json="{}",
+        )
+
+        response = self.client.post(
+            f"/api/receipts/{extraction_id}/approve",
+            json={
+                "merchant": "Sweetgreen",
+                "transaction_date": "2026-04-23",
+                "total_amount": 18.50,
+                "category": "Dining",
+            },
+        )
+
+        payload = response.get_json()
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(payload["profile"]["selected_month"], "2026-04")
+        self.assertIn(
+            "This is your 5th dining expense this week.",
+            payload["profile"]["top_insights"],
+        )
+
+    def test_receipt_approval_rolls_back_when_behavior_note_insert_fails(self):
+        self._signup_and_login()
+        self.client.post(
+            "/api/profile",
+            json={
+                "month": "2026-04",
+                "monthly_income": 3000,
+                "fixed_expenses": 500,
+                "budgeting_goal": "Save 500 for a trip",
+            },
+        )
+
+        storage = self.app.config["storage"]
+        receipt_upload_id = storage.create_receipt_upload(1, "sweetgreen.jpg", "uploads/sweetgreen.jpg")
+        extraction_id = storage.save_receipt_extraction(
+            1,
+            receipt_upload_id=receipt_upload_id,
+            merchant="Sweetgreen",
+            transaction_date="2026-04-23",
+            total_amount=18.50,
+            category="Dining",
+            category_confidence=0.94,
+            status="ready",
+            behavior_note="This is your 5th dining expense this week.",
+            item_tags_json='["salad"]',
+            raw_extraction_json="{}",
+            web_enrichment_json="{}",
+        )
+
+        original_connect = storage._connect
+
+        class FailingBehaviorInsightConnection:
+            def __init__(self, connection):
+                self._connection = connection
+
+            def __enter__(self):
+                self._connection.__enter__()
+                return self
+
+            def __exit__(self, exc_type, exc, tb):
+                return self._connection.__exit__(exc_type, exc, tb)
+
+            def execute(self, sql, parameters=()):
+                if "INSERT INTO receipt_behavior_insights" in sql:
+                    raise sqlite3.IntegrityError("behavior insight insert failed")
+                return self._connection.execute(sql, parameters)
+
+            def __getattr__(self, name):
+                return getattr(self._connection, name)
+
+        def failing_connect():
+            return FailingBehaviorInsightConnection(original_connect())
+
+        with patch.object(storage, "_connect", side_effect=failing_connect):
+            response = self.client.post(
+                f"/api/receipts/{extraction_id}/approve",
+                json={
+                    "merchant": "Sweetgreen",
+                    "transaction_date": "2026-04-23",
+                    "total_amount": 18.50,
+                    "category": "Dining",
+                },
+            )
+
+        pending_receipts = storage.list_pending_receipt_extractions(1)
+
+        self.assertEqual(response.status_code, 500)
+        self.assertEqual(len(pending_receipts), 1)
+        self.assertEqual(pending_receipts[0]["id"], extraction_id)
+        self.assertEqual(pending_receipts[0]["status"], "ready")
+        self.assertIsNone(storage.get_receipt_transaction_link(extraction_id))
+        self.assertEqual(storage.list_receipt_behavior_insights(1, "2026-04"), [])
+
     def test_chat_endpoint_saves_manual_transaction_action(self):
         self._signup_and_login()
 

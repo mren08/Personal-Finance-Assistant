@@ -1427,13 +1427,13 @@ def create_app() -> Flask:
                 transaction_date=transaction_date,
                 total_amount=total_amount,
                 category=category,
-                month_key=payload.get("month"),
             )
         except ValueError as exc:
             return jsonify({"error": str(exc)}), 400
 
-        refresh_user_summary(user_id, payload.get("month"))
-        profile = get_storage().get_dashboard_data(user_id, payload.get("month"))
+        approved_month = transaction_date[:7]
+        refresh_user_summary(user_id, approved_month)
+        profile = get_storage().get_dashboard_data(user_id, approved_month)
         return jsonify({"transaction_id": transaction_id, "profile": profile}), 200
 
     @app.route("/api/receipts/<int:extraction_id>/discard", methods=["POST"])

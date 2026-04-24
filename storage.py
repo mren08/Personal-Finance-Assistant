@@ -462,7 +462,6 @@ class Storage:
         transaction_date: str,
         total_amount: float,
         category: str,
-        month_key: str | None = None,
     ) -> int:
         with self._connect() as conn:
             extraction_row = conn.execute(
@@ -532,8 +531,15 @@ class Storage:
             except sqlite3.IntegrityError as exc:
                 raise RuntimeError("Receipt extraction is already linked to a transaction.") from exc
             behavior_note = str(extraction_row["behavior_note"] if extraction_row else "").strip()
-        if behavior_note and month_key:
-            self.save_receipt_behavior_insight(user_id, month_key, behavior_note)
+            approved_month_key = self._month_key_from_date(transaction_date)
+            if behavior_note:
+                conn.execute(
+                    """
+                    INSERT INTO receipt_behavior_insights (user_id, month_key, note)
+                    VALUES (?, ?, ?)
+                    """,
+                    (user_id, approved_month_key, behavior_note),
+                )
         return transaction_id
 
     def discard_receipt_extraction(self, user_id: int, extraction_id: int) -> None:
