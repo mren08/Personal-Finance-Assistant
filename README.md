@@ -102,6 +102,18 @@ The upload expects a CSV with these columns:
 
 The app treats negative amounts as expenses, ignores non-expense rows (like payments/credits), and uses the `Category` value directly.
 
+## Receipt Uploads
+
+Signed-in users can upload one or more receipt images from the dashboard.
+
+For each receipt, the app extracts:
+- merchant
+- date
+- total
+- category
+
+The app shows a review card before saving anything into spending history. Each approved receipt writes one top-level transaction into the normal ledger. If category confidence is low, the user must choose a category manually before approval.
+
 ## Analyzer Compatibility
 
 The original analyzer route still supports richer budgeting inputs:
