@@ -1,3 +1,4 @@
+import hashlib
 import tempfile
 import unittest
 import sqlite3
@@ -8,6 +9,132 @@ from storage import Storage
 
 
 class StorageTests(unittest.TestCase):
+    @staticmethod
+    def _set_password_reset_token_expires_at(storage: Storage, raw_token: str, expires_at: str) -> None:
+        token_hash = hashlib.sha256(raw_token.encode("utf-8")).hexdigest()
+        with storage._connect() as conn:
+            conn.execute(
+                "UPDATE password_reset_tokens SET expires_at = ? WHERE token_hash = ?",
+                (expires_at, token_hash),
+            )
+
+    def test_create_password_reset_token_returns_raw_token_for_existing_user(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            storage = Storage(f"{tmpdir}/app.db")
+
+            user_id = storage.create_user("demo@example.com", "secret123")
+
+            payload = storage.create_password_reset_token("demo@example.com")
+
+            self.assertEqual(payload["user_id"], user_id)
+            self.assertEqual(payload["email"], "demo@example.com")
+            self.assertTrue(payload["token"])
+            self.assertEqual(payload["expires_in_minutes"], 30)
+
+            with storage._connect() as conn:
+                row = conn.execute(
+                    "SELECT token_hash FROM password_reset_tokens WHERE user_id = ?",
+                    (user_id,),
+                ).fetchone()
+
+            self.assertIsNotNone(row)
+            self.assertNotEqual(row["token_hash"], payload["token"])
+
+    def test_create_password_reset_token_is_neutral_for_missing_user(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            storage = Storage(f"{tmpdir}/app.db")
+
+            payload = storage.create_password_reset_token("missing@example.com")
+
+            self.assertIsNone(payload)
+
+    def test_get_password_reset_token_rejects_invalid_token(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            storage = Storage(f"{tmpdir}/app.db")
+
+            self.assertIsNone(storage.get_password_reset_token("not-a-real-token"))
+
+    def test_reset_password_with_token_updates_password_and_consumes_token(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            storage = Storage(f"{tmpdir}/app.db")
+
+            storage.create_user("demo@example.com", "secret123")
+            payload = storage.create_password_reset_token("demo@example.com")
+
+            storage.reset_password_with_token(payload["token"], "newsecret456")
+
+            self.assertEqual(storage.authenticate_user("demo@example.com", "newsecret456"), payload["user_id"])
+            self.assertIsNone(storage.authenticate_user("demo@example.com", "secret123"))
+            self.assertIsNone(storage.get_password_reset_token(payload["token"]))
+
+    def test_reset_password_with_token_invalidates_older_tokens_for_same_user(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            storage = Storage(f"{tmpdir}/app.db")
+
+            storage.create_user("demo@example.com", "secret123")
+            older = storage.create_password_reset_token("demo@example.com")
+            newer = storage.create_password_reset_token("demo@example.com")
+
+            storage.reset_password_with_token(newer["token"], "newsecret456")
+
+            self.assertIsNone(storage.get_password_reset_token(older["token"]))
+            self.assertIsNone(storage.get_password_reset_token(newer["token"]))
+
+    def test_create_password_reset_token_revokes_existing_unused_tokens_for_same_user(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            storage = Storage(f"{tmpdir}/app.db")
+
+            storage.create_user("demo@example.com", "secret123")
+            older = storage.create_password_reset_token("demo@example.com")
+            newer = storage.create_password_reset_token("demo@example.com")
+
+            self.assertIsNone(storage.get_password_reset_token(older["token"]))
+            self.assertIsNotNone(storage.get_password_reset_token(newer["token"]))
+
+    def test_reset_password_with_token_rejects_already_used_token(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            storage = Storage(f"{tmpdir}/app.db")
+
+            storage.create_user("demo@example.com", "secret123")
+            payload = storage.create_password_reset_token("demo@example.com")
+            with storage._connect() as conn:
+                conn.execute(
+                    "UPDATE password_reset_tokens SET used_at = CURRENT_TIMESTAMP WHERE token_hash = ?",
+                    (hashlib.sha256(payload["token"].encode("utf-8")).hexdigest(),),
+                )
+
+            with self.assertRaises(ValueError):
+                storage.reset_password_with_token(payload["token"], "newsecret456")
+
+    def test_reset_password_with_token_rejects_expired_token(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            storage = Storage(f"{tmpdir}/app.db")
+
+            storage.create_user("demo@example.com", "secret123")
+            payload = storage.create_password_reset_token("demo@example.com")
+            self._set_password_reset_token_expires_at(
+                storage,
+                payload["token"],
+                "2000-01-01T00:00:00+00:00",
+            )
+
+            with self.assertRaises(ValueError):
+                storage.reset_password_with_token(payload["token"], "newsecret456")
+
+    def test_get_password_reset_token_rejects_expired_token(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            storage = Storage(f"{tmpdir}/app.db")
+
+            storage.create_user("demo@example.com", "secret123")
+            payload = storage.create_password_reset_token("demo@example.com")
+            self._set_password_reset_token_expires_at(
+                storage,
+                payload["token"],
+                "2000-01-01T00:00:00+00:00",
+            )
+
+            self.assertIsNone(storage.get_password_reset_token(payload["token"]))
+
     def test_storage_creates_user_and_persists_transactions(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             storage = Storage(f"{tmpdir}/app.db")

@@ -4,8 +4,9 @@ import hashlib
 import json
 import re
 import sqlite3
+import secrets
 from collections import defaultdict
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from csv_parser import CategorizedTransaction, StatementCsvParser
@@ -169,6 +170,15 @@ class Storage:
                     created_at TEXT DEFAULT CURRENT_TIMESTAMP
                 );
 
+                CREATE TABLE IF NOT EXISTS password_reset_tokens (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                    token_hash TEXT NOT NULL UNIQUE,
+                    expires_at TEXT NOT NULL,
+                    used_at TEXT,
+                    created_at TEXT DEFAULT CURRENT_TIMESTAMP
+                );
+
                 """
             )
             self._repair_receipt_transaction_link_duplicates(conn)
@@ -229,6 +239,10 @@ class Storage:
     def _hash_password(password: str) -> str:
         return hashlib.sha256(password.encode("utf-8")).hexdigest()
 
+    @staticmethod
+    def _hash_reset_token(raw_token: str) -> str:
+        return hashlib.sha256(raw_token.encode("utf-8")).hexdigest()
+
     def create_user(self, email: str, password: str) -> int:
         normalized_email = email.strip().lower()
         if not normalized_email or not password:
@@ -266,6 +280,127 @@ class Storage:
             )
         if cursor.rowcount == 0:
             raise ValueError("No account found for that email.")
+
+    def create_password_reset_token(self, email: str) -> dict[str, Any] | None:
+        normalized_email = email.strip().lower()
+        with self._connect() as conn:
+            now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+            user_row = conn.execute(
+                "SELECT id, email FROM users WHERE email = ?",
+                (normalized_email,),
+            ).fetchone()
+            if not user_row:
+                return None
+
+            conn.execute(
+                """
+                UPDATE password_reset_tokens
+                SET used_at = ?
+                WHERE user_id = ?
+                  AND used_at IS NULL
+                  AND expires_at > ?
+                """,
+                (now, int(user_row["id"]), now),
+            )
+            raw_token = secrets.token_urlsafe(32)
+            expires_at = (datetime.now(timezone.utc) + timedelta(minutes=30)).isoformat(timespec="seconds")
+            conn.execute(
+                """
+                INSERT INTO password_reset_tokens (user_id, token_hash, expires_at)
+                VALUES (?, ?, ?)
+                """,
+                (int(user_row["id"]), self._hash_reset_token(raw_token), expires_at),
+            )
+        return {
+            "user_id": int(user_row["id"]),
+            "email": user_row["email"],
+            "token": raw_token,
+            "expires_in_minutes": 30,
+        }
+
+    def get_password_reset_token(self, raw_token: str) -> dict[str, Any] | None:
+        token_hash = self._hash_reset_token(raw_token)
+        with self._connect() as conn:
+            row = self._get_active_password_reset_token_row(conn, token_hash)
+        if not row:
+            return None
+        return {
+            "id": int(row["id"]),
+            "user_id": int(row["user_id"]),
+            "email": row["email"],
+            "expires_at": row["expires_at"],
+            "used_at": row["used_at"],
+        }
+
+    def _get_active_password_reset_token_row(
+        self,
+        conn: sqlite3.Connection,
+        token_hash: str,
+    ) -> sqlite3.Row | None:
+        row = conn.execute(
+            """
+            SELECT prt.id, prt.user_id, prt.expires_at, prt.used_at, u.email
+            FROM password_reset_tokens prt
+            JOIN users u ON u.id = prt.user_id
+            WHERE prt.token_hash = ?
+            """,
+            (token_hash,),
+        ).fetchone()
+        if not row or row["used_at"]:
+            return None
+        expires_at = datetime.fromisoformat(row["expires_at"])
+        if expires_at <= datetime.now(timezone.utc):
+            return None
+        return row
+
+    def reset_password_with_token(self, raw_token: str, new_password: str) -> None:
+        if not new_password:
+            raise ValueError("New password is required.")
+
+        token_hash = self._hash_reset_token(raw_token)
+        now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+        with self._connect() as conn:
+            conn.execute("BEGIN")
+            cursor = conn.execute(
+                """
+                UPDATE password_reset_tokens
+                SET used_at = ?
+                WHERE token_hash = ?
+                  AND used_at IS NULL
+                  AND expires_at > ?
+                """,
+                (now, token_hash, now),
+            )
+            if cursor.rowcount == 0:
+                raise ValueError("Reset link is invalid or expired.")
+
+            row = conn.execute(
+                """
+                SELECT id, user_id
+                FROM password_reset_tokens
+                WHERE token_hash = ?
+                  AND used_at = ?
+                """,
+                (token_hash, now),
+            ).fetchone()
+            if not row:
+                raise RuntimeError("Password reset token claim failed.")
+
+            conn.execute(
+                "UPDATE users SET password_hash = ? WHERE id = ?",
+                (self._hash_password(new_password), int(row["user_id"])),
+            )
+            conn.execute(
+                """
+                UPDATE password_reset_tokens
+                SET used_at = ?
+                WHERE user_id = ?
+                  AND used_at IS NULL
+                  AND id != ?
+                  AND expires_at > ?
+                """,
+                (now, int(row["user_id"]), int(row["id"]), now),
+            )
 
     def get_user(self, user_id: int) -> dict[str, Any] | None:
         with self._connect() as conn:
