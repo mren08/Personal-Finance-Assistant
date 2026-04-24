@@ -1401,7 +1401,12 @@ def create_app() -> Flask:
                     "status": status,
                 }
             )
-        return jsonify({"receipts": saved_cards}), 200
+        return jsonify(
+            {
+                "receipts": saved_cards,
+                "profile": _get_dashboard_profile(get_storage(), user_id, session.get("selected_month")),
+            }
+        ), 200
 
     @app.route("/api/receipts/<int:extraction_id>/approve", methods=["POST"])
     def approve_receipt(extraction_id: int):

@@ -246,6 +246,8 @@ class AppRouteTests(unittest.TestCase):
             },
         )
         self.assertEqual(approve_response.status_code, 200)
+        approve_payload = approve_response.get_json()
+        self.assertEqual(approve_payload["profile"]["pending_receipts"], [])
 
         refreshed_response = self.client.get("/")
         self.assertEqual(refreshed_response.status_code, 200)
@@ -254,6 +256,94 @@ class AppRouteTests(unittest.TestCase):
         review_list_end = html.index("</ul>", review_list_start)
         review_list_markup = html[review_list_start:review_list_end]
         self.assertNotIn("Trader Joe&#39;s", review_list_markup)
+
+    def test_receipt_upload_response_includes_profile_pending_receipts_for_persisted_cards(self):
+        self._signup_and_login()
+
+        with patch("app.extract_receipt_batch") as extract_receipt_batch:
+            extract_receipt_batch.return_value = [
+                {
+                    "receipt_upload_id": self.app.config["storage"].create_receipt_upload(
+                        1,
+                        "ready-receipt.jpg",
+                        "uploads/ready-receipt.jpg",
+                    ),
+                    "merchant": "Trader Joe's",
+                    "transaction_date": "2026-04-23",
+                    "total_amount": 48.22,
+                    "category": "Groceries",
+                    "category_confidence": 0.94,
+                    "status": "ready",
+                    "behavior_note": "",
+                    "item_tags": ["groceries"],
+                }
+            ]
+            response = self.client.post(
+                "/api/upload-receipts",
+                data={"receipts": [(io.BytesIO(b"fake image"), "ready-receipt.jpg")]},
+                content_type="multipart/form-data",
+            )
+
+        payload = response.get_json()
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(len(payload["receipts"]), 1)
+        self.assertIn("profile", payload)
+        self.assertEqual(len(payload["profile"]["pending_receipts"]), 1)
+        self.assertEqual(payload["profile"]["pending_receipts"][0]["merchant"], "Trader Joe's")
+        self.assertEqual(payload["profile"]["pending_receipts"][0]["status"], "ready")
+
+    def test_receipt_upload_response_separates_error_cards_from_persisted_pending_receipts(self):
+        self._signup_and_login()
+
+        with patch("app.extract_receipt_batch") as extract_receipt_batch:
+            extract_receipt_batch.return_value = [
+                {
+                    "merchant": "",
+                    "transaction_date": "",
+                    "total_amount": 0.0,
+                    "category": "",
+                    "category_confidence": 0.0,
+                    "status": "error",
+                    "behavior_note": "Could not read receipt.",
+                    "item_tags": [],
+                },
+                {
+                    "receipt_upload_id": self.app.config["storage"].create_receipt_upload(
+                        1,
+                        "ready-receipt.jpg",
+                        "uploads/ready-receipt.jpg",
+                    ),
+                    "merchant": "Sweetgreen",
+                    "transaction_date": "2026-04-23",
+                    "total_amount": 18.50,
+                    "category": "Dining",
+                    "category_confidence": 0.94,
+                    "status": "ready",
+                    "behavior_note": "",
+                    "item_tags": ["salad"],
+                },
+            ]
+            response = self.client.post(
+                "/api/upload-receipts",
+                data={
+                    "receipts": [
+                        (io.BytesIO(b"fake image 1"), "error-receipt.jpg"),
+                        (io.BytesIO(b"fake image 2"), "ready-receipt.jpg"),
+                    ]
+                },
+                content_type="multipart/form-data",
+            )
+
+        payload = response.get_json()
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(len(payload["receipts"]), 2)
+        self.assertEqual(payload["receipts"][0]["status"], "error")
+        self.assertNotIn("id", payload["receipts"][0])
+        self.assertEqual(len(payload["profile"]["pending_receipts"]), 1)
+        self.assertEqual(payload["profile"]["pending_receipts"][0]["merchant"], "Sweetgreen")
+        self.assertEqual(payload["profile"]["pending_receipts"][0]["status"], "ready")
 
     def test_chat_endpoint_saves_manual_transaction_action(self):
         self._signup_and_login()

@@ -733,10 +733,12 @@
                         <div class="full receipt-review-note">{{ receipt.behavior_note }}</div>
                       {% endif %}
                     </div>
-                    <div class="receipt-review-actions">
-                      <button type="button" data-receipt-action="approve">Approve</button>
-                      <button type="button" class="secondary" data-receipt-action="discard">Discard</button>
-                    </div>
+                    {% if receipt.id and receipt.status != 'error' %}
+                      <div class="receipt-review-actions">
+                        <button type="button" data-receipt-action="approve">Approve</button>
+                        <button type="button" class="secondary" data-receipt-action="discard">Discard</button>
+                      </div>
+                    {% endif %}
                   </li>
                 {% endfor %}
               {% else %}
@@ -888,6 +890,7 @@
       let currentProfile = {{ profile|tojson }};
       let showFullMessageHistory = false;
       const COLLAPSED_MESSAGE_COUNT = 6;
+      let localReceiptErrorCounter = 0;
 
       function money(value) {
         return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(value || 0);
@@ -902,8 +905,78 @@
           .replaceAll("'", "&#39;");
       }
 
-      function renderProfile(profile) {
-        currentProfile = profile;
+      async function requestJson(url, options) {
+        let response;
+        try {
+          response = await fetch(url, options);
+        } catch (error) {
+          return { ok: false, payload: null, error: "Network error. Try again." };
+        }
+
+        let payload = null;
+        try {
+          payload = await response.json();
+        } catch (error) {
+          return {
+            ok: false,
+            payload: null,
+            error: response.ok ? "Unexpected server response." : "Request failed. Try again.",
+          };
+        }
+
+        if (!response.ok) {
+          return { ok: false, payload, error: payload.error || "Request failed." };
+        }
+
+        return { ok: true, payload, error: null };
+      }
+
+      function isLocalReceiptError(receipt) {
+        return Boolean(receipt) && receipt.status === "error" && !receipt.id;
+      }
+
+      function ensureLocalReceiptErrorKey(receipt) {
+        if (!isLocalReceiptError(receipt)) {
+          return receipt;
+        }
+        if (receipt.local_key) {
+          return receipt;
+        }
+        localReceiptErrorCounter += 1;
+        return {
+          ...receipt,
+          local_key: `receipt-error-${Date.now()}-${localReceiptErrorCounter}`,
+        };
+      }
+
+      function buildCanonicalPendingReceipts(profilePendingReceipts, uploadBatch = []) {
+        const persistedById = new Map();
+        (profilePendingReceipts || []).forEach((receipt) => {
+          if (receipt && receipt.id) {
+            persistedById.set(String(receipt.id), receipt);
+          }
+        });
+
+        const localErrorsByKey = new Map();
+        [...(uploadBatch || []), ...((currentProfile && currentProfile.pending_receipts) || [])]
+          .filter(isLocalReceiptError)
+          .map(ensureLocalReceiptErrorKey)
+          .forEach((receipt) => {
+            localErrorsByKey.set(receipt.local_key, receipt);
+          });
+
+        return [...localErrorsByKey.values(), ...persistedById.values()];
+      }
+
+      function renderProfile(profile, options = {}) {
+        const pendingReceipts = buildCanonicalPendingReceipts(
+          profile.pending_receipts || [],
+          options.uploadBatch || [],
+        );
+        currentProfile = {
+          ...profile,
+          pending_receipts: pendingReceipts,
+        };
         const monthLabel = profile.selected_month_label || "this month";
         document.getElementById("selected-month-label").textContent = `Viewing ${profile.selected_month_label || "No month selected"}`;
         document.getElementById("leftover-heading").textContent = `Left in ${monthLabel}`;
@@ -932,7 +1005,7 @@
         renderRecommendedActions(profile.recommended_actions || []);
         renderCategoryBreakdown(profile.category_breakdown || [], profile.total_spent || 0);
         renderMonthlyPlanHistory(profile.monthly_plan_history || []);
-        renderReceiptReviews(profile.pending_receipts || []);
+        renderReceiptReviews(currentProfile.pending_receipts || []);
         renderMessages(profile.messages || []);
       }
 
@@ -1142,6 +1215,7 @@
         }
         list.innerHTML = receipts.map((receipt) => {
           const receiptId = receipt.id ? ` data-receipt-id="${receipt.id}"` : "";
+          const localErrorKey = receipt.local_key ? ` data-local-receipt-key="${escapeHtml(receipt.local_key)}"` : "";
           const statusLabel = escapeHtml(String(receipt.status || "pending").replaceAll("_", " "));
           const note = receipt.behavior_note
             ? `<div class="full receipt-review-note">${escapeHtml(receipt.behavior_note)}</div>`
@@ -1155,7 +1229,7 @@
             `
             : "";
           return `
-            <li class="receipt-review-card"${receiptId}>
+            <li class="receipt-review-card"${receiptId}${localErrorKey}>
               <div class="receipt-review-meta">
                 <strong>${escapeHtml(receipt.merchant || "Untitled receipt")}</strong>
                 <span class="pill">${statusLabel}</span>
@@ -1229,7 +1303,7 @@
         const status = document.getElementById("profile-status");
         status.textContent = "Saving monthly plan...";
 
-        const response = await fetch("/api/profile", {
+        const { ok, payload, error } = await requestJson("/api/profile", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
@@ -1239,10 +1313,9 @@
             month: document.getElementById("month-selector").value,
           }),
         });
-        const payload = await response.json();
 
-        if (!response.ok) {
-          status.textContent = payload.error || "Saving failed.";
+        if (!ok) {
+          status.textContent = error || "Saving failed.";
           return;
         }
 
@@ -1256,14 +1329,13 @@
         status.textContent = "Saving statement...";
         const formData = new FormData(event.currentTarget);
 
-        const response = await fetch("/api/upload-statement", {
+        const { ok, payload, error } = await requestJson("/api/upload-statement", {
           method: "POST",
           body: formData,
         });
-        const payload = await response.json();
 
-        if (!response.ok) {
-          status.textContent = payload.error || "Upload failed.";
+        if (!ok) {
+          status.textContent = error || "Upload failed.";
           return;
         }
 
@@ -1278,19 +1350,17 @@
         status.textContent = "Uploading receipts...";
         const formData = new FormData(event.currentTarget);
 
-        const response = await fetch("/api/upload-receipts", {
+        const { ok, payload, error } = await requestJson("/api/upload-receipts", {
           method: "POST",
           body: formData,
         });
-        const payload = await response.json();
 
-        if (!response.ok) {
-          status.textContent = payload.error || "Receipt upload failed.";
+        if (!ok) {
+          status.textContent = error || "Receipt upload failed.";
           return;
         }
 
-        currentProfile.pending_receipts = [...(payload.receipts || []), ...((currentProfile && currentProfile.pending_receipts) || [])];
-        renderReceiptReviews(currentProfile.pending_receipts);
+        renderProfile(payload.profile || currentProfile, { uploadBatch: payload.receipts || [] });
         status.textContent = `Uploaded ${payload.receipts.length} receipt${payload.receipts.length === 1 ? "" : "s"} for review.`;
         event.currentTarget.reset();
       });
@@ -1312,7 +1382,7 @@
 
         if (action === "approve") {
           status.textContent = "Saving receipt...";
-          const response = await fetch(`/api/receipts/${receiptId}/approve`, {
+          const { ok, payload, error } = await requestJson(`/api/receipts/${receiptId}/approve`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
@@ -1323,10 +1393,9 @@
               month: document.getElementById("month-selector").value,
             }),
           });
-          const payload = await response.json();
 
-          if (!response.ok) {
-            status.textContent = payload.error || "Receipt approval failed.";
+          if (!ok) {
+            status.textContent = error || "Receipt approval failed.";
             return;
           }
 
@@ -1336,13 +1405,12 @@
         }
 
         status.textContent = "Discarding receipt...";
-        const response = await fetch(`/api/receipts/${receiptId}/discard`, {
+        const { ok, payload, error } = await requestJson(`/api/receipts/${receiptId}/discard`, {
           method: "POST",
         });
-        const payload = await response.json();
 
-        if (!response.ok) {
-          status.textContent = payload.error || "Receipt discard failed.";
+        if (!ok) {
+          status.textContent = error || "Receipt discard failed.";
           return;
         }
 
@@ -1359,15 +1427,14 @@
         const status = document.getElementById("chat-status");
         status.textContent = "AI Chatbot is responding...";
 
-        const response = await fetch("/api/chat", {
+        const { ok, payload, error } = await requestJson("/api/chat", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ message: input.value, month: document.getElementById("month-selector").value }),
         });
-        const payload = await response.json();
 
-        if (!response.ok) {
-          status.textContent = payload.error || "Message failed.";
+        if (!ok) {
+          status.textContent = error || "Message failed.";
           return;
         }
 
