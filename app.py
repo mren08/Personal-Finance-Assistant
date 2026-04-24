@@ -565,8 +565,14 @@ def _extract_monthly_focus_content(actions: list[dict]) -> str | None:
 
 
 def _coerce_selected_month(storage: Storage, user_id: int, month_key: str | None = None) -> str | None:
-    profile = storage.get_dashboard_data(user_id, month_key)
+    profile = _get_dashboard_profile(storage, user_id, month_key)
     return profile.get("selected_month")
+
+
+def _get_dashboard_profile(storage: Storage, user_id: int, month_key: str | None = None) -> dict[str, Any]:
+    profile = storage.get_dashboard_data(user_id, month_key)
+    profile["pending_receipts"] = storage.list_pending_receipt_extractions(user_id)
+    return profile
 
 
 def _merge_selected_month_into_transaction(transaction: dict, selected_month: str | None) -> dict:
@@ -923,7 +929,7 @@ def create_app() -> Flask:
 
     def refresh_user_summary(user_id: int, month_key: str | None = None) -> dict:
         storage = get_storage()
-        profile = storage.get_dashboard_data(user_id, month_key)
+        profile = _get_dashboard_profile(storage, user_id, month_key)
         financial_profile = profile.get("financial_profile") or {
             "monthly_income": 0,
             "fixed_expenses": 0,
@@ -949,7 +955,7 @@ def create_app() -> Flask:
                 f"Available before fixed expenses: ${summary['available_before_fixed']:.2f}."
             ),
         )
-        return storage.get_dashboard_data(user_id, profile.get("selected_month"))
+        return _get_dashboard_profile(storage, user_id, profile.get("selected_month"))
 
     def update_current_month_focus_note(user_id: int, profile: dict, content: str | None = None) -> dict:
         summary = profile.get("monthly_summary") or {}
@@ -968,7 +974,7 @@ def create_app() -> Flask:
             note_type=note_type,
             content=content or _build_month_focus_note(profile, summary),
         )
-        return get_storage().get_dashboard_data(user_id, selected_month)
+        return _get_dashboard_profile(get_storage(), user_id, selected_month)
 
     def apply_agent_actions(user_id: int, actions: list[dict]) -> None:
         storage = get_storage()
@@ -1057,7 +1063,7 @@ def create_app() -> Flask:
                 session["selected_month"] = profile.get("selected_month")
                 profile = update_current_month_focus_note(user_id, profile)
                 maybe_seed_proactive_chat(user_id, profile)
-                profile = get_storage().get_dashboard_data(user_id, session.get("selected_month"))
+                profile = _get_dashboard_profile(get_storage(), user_id, session.get("selected_month"))
             else:
                 session.pop("user_id", None)
                 session.pop("selected_month", None)
@@ -1312,7 +1318,7 @@ def create_app() -> Flask:
             return jsonify(
                 {
                     "saved_transactions": len(transactions),
-                    "profile": get_storage().get_dashboard_data(user_id, session.get("selected_month")),
+                    "profile": _get_dashboard_profile(get_storage(), user_id, session.get("selected_month")),
                 }
             )
         except ValueError as exc:

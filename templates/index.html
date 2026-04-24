@@ -355,6 +355,48 @@
       padding: 12px 14px;
       background: #fffdfa;
     }
+    .receipt-review-list {
+      list-style: none;
+      margin: 14px 0 0;
+      padding: 0;
+      display: grid;
+      gap: 12px;
+    }
+    .receipt-review-card {
+      border: 1px solid #efe4d3;
+      border-radius: 16px;
+      padding: 14px;
+      background: #fff8f1;
+      display: grid;
+      gap: 12px;
+    }
+    .receipt-review-grid {
+      display: grid;
+      gap: 10px;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+    .receipt-review-grid .full {
+      grid-column: 1 / -1;
+    }
+    .receipt-review-actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+    }
+    .receipt-review-actions button {
+      width: auto;
+    }
+    .receipt-review-meta {
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      flex-wrap: wrap;
+      align-items: center;
+    }
+    .receipt-review-note {
+      font-size: 0.88rem;
+      color: var(--muted);
+    }
     .transactions li, .messages li {
       display: grid;
       gap: 6px;
@@ -652,6 +694,58 @@
           </div>
 
           <div class="panel">
+            <h2>Upload receipts</h2>
+            <p class="muted">Add receipt photos here to review merchant, date, amount, and category before they become part of your transaction history.</p>
+            <form id="receipt-upload-form" class="upload-form">
+              <div>
+                <label for="receipt-files">Receipt images</label>
+                <input id="receipt-files" name="receipts" type="file" accept="image/*" multiple required>
+              </div>
+              <button type="submit">Upload receipts for review</button>
+            </form>
+            <p id="receipt-upload-status" class="status"></p>
+            <ul id="receipt-review-list" class="receipt-review-list">
+              {% if profile.pending_receipts %}
+                {% for receipt in profile.pending_receipts %}
+                  <li class="receipt-review-card" data-receipt-id="{{ receipt.id }}">
+                    <div class="receipt-review-meta">
+                      <strong>{{ receipt.merchant or 'Untitled receipt' }}</strong>
+                      <span class="pill">{{ receipt.status.replace('_', ' ') }}</span>
+                    </div>
+                    <div class="receipt-review-grid">
+                      <div>
+                        <label>Merchant</label>
+                        <input type="text" name="merchant" value="{{ receipt.merchant }}">
+                      </div>
+                      <div>
+                        <label>Date</label>
+                        <input type="date" name="transaction_date" value="{{ receipt.transaction_date }}">
+                      </div>
+                      <div>
+                        <label>Total amount</label>
+                        <input type="number" step="0.01" min="0.01" name="total_amount" value="{{ receipt.total_amount }}">
+                      </div>
+                      <div>
+                        <label>Category</label>
+                        <input type="text" name="category" value="{{ receipt.category }}">
+                      </div>
+                      {% if receipt.behavior_note %}
+                        <div class="full receipt-review-note">{{ receipt.behavior_note }}</div>
+                      {% endif %}
+                    </div>
+                    <div class="receipt-review-actions">
+                      <button type="button" data-receipt-action="approve">Approve</button>
+                      <button type="button" class="secondary" data-receipt-action="discard">Discard</button>
+                    </div>
+                  </li>
+                {% endfor %}
+              {% else %}
+                <li class="empty">No receipts waiting for review.</li>
+              {% endif %}
+            </ul>
+          </div>
+
+          <div class="panel">
             <div class="panel-toolbar">
               <h2 id="transactions-heading" style="margin-bottom:0;">Recent transactions for {{ profile.selected_month_label or 'selected month' }}</h2>
               <div>
@@ -799,6 +893,15 @@
         return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(value || 0);
       }
 
+      function escapeHtml(value) {
+        return String(value ?? "")
+          .replaceAll("&", "&amp;")
+          .replaceAll("<", "&lt;")
+          .replaceAll(">", "&gt;")
+          .replaceAll('"', "&quot;")
+          .replaceAll("'", "&#39;");
+      }
+
       function renderProfile(profile) {
         currentProfile = profile;
         const monthLabel = profile.selected_month_label || "this month";
@@ -829,6 +932,7 @@
         renderRecommendedActions(profile.recommended_actions || []);
         renderCategoryBreakdown(profile.category_breakdown || [], profile.total_spent || 0);
         renderMonthlyPlanHistory(profile.monthly_plan_history || []);
+        renderReceiptReviews(profile.pending_receipts || []);
         renderMessages(profile.messages || []);
       }
 
@@ -1030,6 +1134,57 @@
         list.innerHTML = actions.map((action) => `<li>${action}</li>`).join("");
       }
 
+      function renderReceiptReviews(receipts) {
+        const list = document.getElementById("receipt-review-list");
+        if (!receipts.length) {
+          list.innerHTML = '<li class="empty">No receipts waiting for review.</li>';
+          return;
+        }
+        list.innerHTML = receipts.map((receipt) => {
+          const receiptId = receipt.id ? ` data-receipt-id="${receipt.id}"` : "";
+          const statusLabel = escapeHtml(String(receipt.status || "pending").replaceAll("_", " "));
+          const note = receipt.behavior_note
+            ? `<div class="full receipt-review-note">${escapeHtml(receipt.behavior_note)}</div>`
+            : "";
+          const actions = receipt.id && receipt.status !== "error"
+            ? `
+              <div class="receipt-review-actions">
+                <button type="button" data-receipt-action="approve">Approve</button>
+                <button type="button" class="secondary" data-receipt-action="discard">Discard</button>
+              </div>
+            `
+            : "";
+          return `
+            <li class="receipt-review-card"${receiptId}>
+              <div class="receipt-review-meta">
+                <strong>${escapeHtml(receipt.merchant || "Untitled receipt")}</strong>
+                <span class="pill">${statusLabel}</span>
+              </div>
+              <div class="receipt-review-grid">
+                <div>
+                  <label>Merchant</label>
+                  <input type="text" name="merchant" value="${escapeHtml(receipt.merchant || "")}">
+                </div>
+                <div>
+                  <label>Date</label>
+                  <input type="date" name="transaction_date" value="${escapeHtml(receipt.transaction_date || "")}">
+                </div>
+                <div>
+                  <label>Total amount</label>
+                  <input type="number" step="0.01" min="0.01" name="total_amount" value="${escapeHtml(receipt.total_amount || "")}">
+                </div>
+                <div>
+                  <label>Category</label>
+                  <input type="text" name="category" value="${escapeHtml(receipt.category || "")}">
+                </div>
+                ${note}
+              </div>
+              ${actions}
+            </li>
+          `;
+        }).join("");
+      }
+
       function renderMessages(messages) {
         const list = document.getElementById("messages-list");
         const controls = document.getElementById("messages-controls");
@@ -1115,6 +1270,87 @@
         renderProfile(payload.profile);
         status.textContent = `Saved ${payload.saved_transactions} expense transactions to your history.`;
         event.currentTarget.reset();
+      });
+
+      document.getElementById("receipt-upload-form").addEventListener("submit", async (event) => {
+        event.preventDefault();
+        const status = document.getElementById("receipt-upload-status");
+        status.textContent = "Uploading receipts...";
+        const formData = new FormData(event.currentTarget);
+
+        const response = await fetch("/api/upload-receipts", {
+          method: "POST",
+          body: formData,
+        });
+        const payload = await response.json();
+
+        if (!response.ok) {
+          status.textContent = payload.error || "Receipt upload failed.";
+          return;
+        }
+
+        currentProfile.pending_receipts = [...(payload.receipts || []), ...((currentProfile && currentProfile.pending_receipts) || [])];
+        renderReceiptReviews(currentProfile.pending_receipts);
+        status.textContent = `Uploaded ${payload.receipts.length} receipt${payload.receipts.length === 1 ? "" : "s"} for review.`;
+        event.currentTarget.reset();
+      });
+
+      document.getElementById("receipt-review-list").addEventListener("click", async (event) => {
+        const button = event.target.closest("[data-receipt-action]");
+        if (!button) {
+          return;
+        }
+
+        const card = button.closest("[data-receipt-id]");
+        if (!card) {
+          return;
+        }
+
+        const receiptId = card.getAttribute("data-receipt-id");
+        const status = document.getElementById("receipt-upload-status");
+        const action = button.getAttribute("data-receipt-action");
+
+        if (action === "approve") {
+          status.textContent = "Saving receipt...";
+          const response = await fetch(`/api/receipts/${receiptId}/approve`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              merchant: card.querySelector('[name="merchant"]').value.trim(),
+              transaction_date: card.querySelector('[name="transaction_date"]').value,
+              total_amount: Number(card.querySelector('[name="total_amount"]').value || 0),
+              category: card.querySelector('[name="category"]').value.trim(),
+              month: document.getElementById("month-selector").value,
+            }),
+          });
+          const payload = await response.json();
+
+          if (!response.ok) {
+            status.textContent = payload.error || "Receipt approval failed.";
+            return;
+          }
+
+          renderProfile(payload.profile);
+          status.textContent = "Receipt approved and added to your history.";
+          return;
+        }
+
+        status.textContent = "Discarding receipt...";
+        const response = await fetch(`/api/receipts/${receiptId}/discard`, {
+          method: "POST",
+        });
+        const payload = await response.json();
+
+        if (!response.ok) {
+          status.textContent = payload.error || "Receipt discard failed.";
+          return;
+        }
+
+        currentProfile.pending_receipts = ((currentProfile && currentProfile.pending_receipts) || []).filter(
+          (receipt) => String(receipt.id) !== receiptId,
+        );
+        renderReceiptReviews(currentProfile.pending_receipts);
+        status.textContent = "Receipt discarded.";
       });
 
       document.getElementById("chat-form").addEventListener("submit", async (event) => {

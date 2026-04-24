@@ -199,6 +199,62 @@ class AppRouteTests(unittest.TestCase):
         self.assertIn("profile", payload)
         self.assertEqual(payload["profile"]["transaction_count"], 2)
 
+    def test_logged_in_dashboard_shows_receipt_upload_section(self):
+        self._signup_and_login()
+
+        response = self.client.get("/")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(b"Upload receipts", response.data)
+        self.assertIn(b"receipt-review-list", response.data)
+
+    def test_approved_receipt_disappears_from_pending_review_queue(self):
+        self._signup_and_login()
+
+        with patch("app.extract_receipt_batch") as extract_receipt_batch:
+            extract_receipt_batch.return_value = [
+                {
+                    "receipt_upload_id": self.app.config["storage"].create_receipt_upload(
+                        1,
+                        "ready-receipt.jpg",
+                        "uploads/ready-receipt.jpg",
+                    ),
+                    "merchant": "Trader Joe's",
+                    "transaction_date": "2026-04-23",
+                    "total_amount": 48.22,
+                    "category": "Groceries",
+                    "category_confidence": 0.94,
+                    "status": "ready",
+                    "behavior_note": "",
+                    "item_tags": ["groceries"],
+                }
+            ]
+            receipt = self._upload_receipt_for_review("ready-receipt.jpg")
+
+        pending_response = self.client.get("/")
+        self.assertEqual(pending_response.status_code, 200)
+        self.assertIn(b"Trader Joe&#39;s", pending_response.data)
+
+        approve_response = self.client.post(
+            f"/api/receipts/{receipt['id']}/approve",
+            json={
+                "merchant": "Trader Joe's",
+                "transaction_date": "2026-04-23",
+                "total_amount": 48.22,
+                "category": "Groceries",
+                "month": "2026-04",
+            },
+        )
+        self.assertEqual(approve_response.status_code, 200)
+
+        refreshed_response = self.client.get("/")
+        self.assertEqual(refreshed_response.status_code, 200)
+        html = refreshed_response.data.decode("utf-8")
+        review_list_start = html.index('<ul id="receipt-review-list"')
+        review_list_end = html.index("</ul>", review_list_start)
+        review_list_markup = html[review_list_start:review_list_end]
+        self.assertNotIn("Trader Joe&#39;s", review_list_markup)
+
     def test_chat_endpoint_saves_manual_transaction_action(self):
         self._signup_and_login()
 
