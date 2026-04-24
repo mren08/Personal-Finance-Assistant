@@ -570,9 +570,7 @@ def _coerce_selected_month(storage: Storage, user_id: int, month_key: str | None
 
 
 def _get_dashboard_profile(storage: Storage, user_id: int, month_key: str | None = None) -> dict[str, Any]:
-    profile = storage.get_dashboard_data(user_id, month_key)
-    profile["pending_receipts"] = storage.list_pending_receipt_extractions(user_id)
-    return profile
+    return storage.get_dashboard_data(user_id, month_key)
 
 
 def _merge_selected_month_into_transaction(transaction: dict, selected_month: str | None) -> dict:
@@ -1429,11 +1427,13 @@ def create_app() -> Flask:
                 transaction_date=transaction_date,
                 total_amount=total_amount,
                 category=category,
+                month_key=payload.get("month"),
             )
         except ValueError as exc:
             return jsonify({"error": str(exc)}), 400
 
-        profile = refresh_user_summary(user_id, payload.get("month"))
+        refresh_user_summary(user_id, payload.get("month"))
+        profile = get_storage().get_dashboard_data(user_id, payload.get("month"))
         return jsonify({"transaction_id": transaction_id, "profile": profile}), 200
 
     @app.route("/api/receipts/<int:extraction_id>/discard", methods=["POST"])

@@ -462,8 +462,17 @@ class Storage:
         transaction_date: str,
         total_amount: float,
         category: str,
+        month_key: str | None = None,
     ) -> int:
         with self._connect() as conn:
+            extraction_row = conn.execute(
+                """
+                SELECT behavior_note
+                FROM receipt_extractions
+                WHERE id = ? AND user_id = ?
+                """,
+                (extraction_id, user_id),
+            ).fetchone()
             # Placeholder uploads start in needs_correction and become approvable once the user supplies valid edits.
             cursor = conn.execute(
                 """
@@ -522,7 +531,10 @@ class Storage:
                 )
             except sqlite3.IntegrityError as exc:
                 raise RuntimeError("Receipt extraction is already linked to a transaction.") from exc
-            return transaction_id
+            behavior_note = str(extraction_row["behavior_note"] if extraction_row else "").strip()
+        if behavior_note and month_key:
+            self.save_receipt_behavior_insight(user_id, month_key, behavior_note)
+        return transaction_id
 
     def discard_receipt_extraction(self, user_id: int, extraction_id: int) -> None:
         with self._connect() as conn:
@@ -1086,6 +1098,7 @@ class Storage:
                 monthly_summary=monthly_summary,
                 financial_profile=financial_profile,
             ),
+            "pending_receipts": self.list_pending_receipt_extractions(user_id),
         }
 
     @staticmethod
