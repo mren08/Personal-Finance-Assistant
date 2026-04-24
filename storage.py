@@ -330,7 +330,8 @@ class Storage:
 
     @staticmethod
     def _normalize_merchant_key(merchant_key: str) -> str:
-        return merchant_key.strip().lower()
+        normalized = re.sub(r"[^a-z0-9]+", " ", merchant_key.strip().lower())
+        return re.sub(r"\s+", " ", normalized).strip()
 
     def normalize_merchant_key(self, merchant_key: str) -> str:
         return self._normalize_merchant_key(merchant_key)

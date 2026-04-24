@@ -1339,22 +1339,26 @@ def create_app() -> Flask:
                 saved_cards.append(card)
                 continue
             storage = get_storage()
-            receipt_text = " ".join(str(tag).strip() for tag in (card.get("item_tags") or []) if str(tag).strip())
-            resolved_category = resolve_receipt_category(
-                storage,
-                str(card.get("merchant") or ""),
-                receipt_text=receipt_text,
-            )
             merchant = str(card.get("merchant") or "").strip()
             category = str(card.get("category") or "").strip()
             category_confidence = round(float(card.get("category_confidence") or 0.0), 2)
             status = str(card.get("status") or "needs_correction")
-            if category_confidence < _RECEIPT_CATEGORY_READY_CONFIDENCE:
+            resolved_category: dict[str, Any] = {"web_enrichment": {}}
+            if category and category_confidence >= _RECEIPT_CATEGORY_READY_CONFIDENCE and status == "ready":
+                pass
+            else:
+                receipt_text = " ".join(str(tag).strip() for tag in (card.get("item_tags") or []) if str(tag).strip())
+                resolved_category = resolve_receipt_category(
+                    storage,
+                    merchant,
+                    receipt_text=receipt_text,
+                )
                 if resolved_category["category"]:
                     category = str(resolved_category["category"])
                     category_confidence = round(float(resolved_category["confidence"]), 2)
                     status = "ready"
-                elif merchant and not category:
+                elif merchant:
+                    category = ""
                     category_confidence = 0.0
                     status = "needs_category"
             try:

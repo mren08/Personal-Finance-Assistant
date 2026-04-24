@@ -1200,7 +1200,47 @@ class AppRouteTests(unittest.TestCase):
         self.assertEqual(payload["receipts"][0]["status"], "ready")
         enrich_merchant_category_from_web.assert_not_called()
 
-    def test_receipt_upload_marks_card_needs_category_when_web_lookup_stays_low_confidence(self):
+    def test_receipt_upload_skips_web_lookup_for_high_confidence_extracted_category(self):
+        self._signup_and_login()
+
+        with patch("app.extract_receipt_batch") as extract_receipt_batch, patch(
+            "app.enrich_merchant_category_from_web",
+            create=True,
+        ) as enrich_merchant_category_from_web:
+            extract_receipt_batch.return_value = [
+                {
+                    "receipt_upload_id": self.app.config["storage"].create_receipt_upload(
+                        1,
+                        "receipt-ready.jpg",
+                        "uploads/receipt-ready.jpg",
+                    ),
+                    "merchant": "Known Market",
+                    "transaction_date": "2026-04-23",
+                    "total_amount": 58.10,
+                    "category": "Groceries",
+                    "category_confidence": 0.94,
+                    "status": "ready",
+                    "behavior_note": "",
+                    "item_tags": ["produce"],
+                }
+            ]
+
+            response = self.client.post(
+                "/api/upload-receipts",
+                data={"receipts": [(io.BytesIO(b"fake image"), "receipt-ready.jpg")]},
+                content_type="multipart/form-data",
+            )
+
+        payload = response.get_json()
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(len(payload["receipts"]), 1)
+        self.assertEqual(payload["receipts"][0]["category"], "Groceries")
+        self.assertEqual(payload["receipts"][0]["category_confidence"], 0.94)
+        self.assertEqual(payload["receipts"][0]["status"], "ready")
+        enrich_merchant_category_from_web.assert_not_called()
+
+    def test_receipt_upload_marks_low_confidence_prefilled_category_as_needs_category(self):
         self._signup_and_login()
 
         with patch("app.extract_receipt_batch") as extract_receipt_batch, patch(
@@ -1217,8 +1257,8 @@ class AppRouteTests(unittest.TestCase):
                     "merchant": "Unknown Corner Shop",
                     "transaction_date": "2026-04-23",
                     "total_amount": 19.45,
-                    "category": "",
-                    "category_confidence": 0.0,
+                    "category": "Dining",
+                    "category_confidence": 0.42,
                     "status": "needs_correction",
                     "behavior_note": "",
                     "item_tags": [],
