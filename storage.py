@@ -333,6 +333,10 @@ class Storage:
         normalized = re.sub(r"[^a-z0-9]+", " ", merchant_key.strip().lower())
         return re.sub(r"\s+", " ", normalized).strip()
 
+    @staticmethod
+    def _legacy_normalize_merchant_key(merchant_key: str) -> str:
+        return merchant_key.strip().lower()
+
     def normalize_merchant_key(self, merchant_key: str) -> str:
         return self._normalize_merchant_key(merchant_key)
 
@@ -561,15 +565,24 @@ class Storage:
         return dict(row)
 
     def get_cached_merchant_category(self, merchant_key: str) -> dict[str, Any] | None:
+        normalized_key = self._normalize_merchant_key(merchant_key)
+        candidate_keys = [normalized_key]
+        legacy_key = self._legacy_normalize_merchant_key(merchant_key)
+        if legacy_key and legacy_key not in candidate_keys:
+            candidate_keys.append(legacy_key)
         with self._connect() as conn:
-            row = conn.execute(
-                """
-                SELECT merchant_key, category, confidence, enrichment_source, checked_at
-                FROM merchant_category_cache
-                WHERE merchant_key = ?
-                """,
-                (self._normalize_merchant_key(merchant_key),),
-            ).fetchone()
+            row = None
+            for candidate_key in candidate_keys:
+                row = conn.execute(
+                    """
+                    SELECT merchant_key, category, confidence, enrichment_source, checked_at
+                    FROM merchant_category_cache
+                    WHERE merchant_key = ?
+                    """,
+                    (candidate_key,),
+                ).fetchone()
+                if row:
+                    break
         if not row:
             return None
         cached = dict(row)

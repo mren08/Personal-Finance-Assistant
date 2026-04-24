@@ -801,7 +801,7 @@ def resolve_receipt_category(storage: Storage, merchant: str, receipt_text: str 
     if not merchant_key:
         return unresolved
 
-    cached = storage.get_cached_merchant_category(merchant_key)
+    cached = storage.get_cached_merchant_category(merchant)
     if cached and str(cached.get("category") or "").strip():
         cached_confidence = float(cached.get("confidence") or 0.0)
         if cached_confidence >= _RECEIPT_CATEGORY_READY_CONFIDENCE:
@@ -1347,6 +1347,7 @@ def create_app() -> Flask:
             if category and category_confidence >= _RECEIPT_CATEGORY_READY_CONFIDENCE and status == "ready":
                 pass
             else:
+                had_low_confidence_guess = bool(category) and category_confidence < _RECEIPT_CATEGORY_READY_CONFIDENCE
                 receipt_text = " ".join(str(tag).strip() for tag in (card.get("item_tags") or []) if str(tag).strip())
                 resolved_category = resolve_receipt_category(
                     storage,
@@ -1357,7 +1358,7 @@ def create_app() -> Flask:
                     category = str(resolved_category["category"])
                     category_confidence = round(float(resolved_category["confidence"]), 2)
                     status = "ready"
-                elif merchant:
+                elif merchant or had_low_confidence_guess:
                     category = ""
                     category_confidence = 0.0
                     status = "needs_category"

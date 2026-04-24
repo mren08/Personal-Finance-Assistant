@@ -1200,6 +1200,60 @@ class AppRouteTests(unittest.TestCase):
         self.assertEqual(payload["receipts"][0]["status"], "ready")
         enrich_merchant_category_from_web.assert_not_called()
 
+    def test_receipt_upload_reuses_legacy_format_cached_merchant_key_after_normalization_change(self):
+        self._signup_and_login()
+
+        with self.app.config["storage"]._connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO merchant_category_cache (
+                    merchant_key,
+                    category,
+                    confidence,
+                    enrichment_source,
+                    checked_at
+                )
+                VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
+                """,
+                ("corner-shop", "Groceries", 0.97, "cache"),
+            )
+
+        with patch("app.extract_receipt_batch") as extract_receipt_batch, patch(
+            "app.enrich_merchant_category_from_web",
+            create=True,
+        ) as enrich_merchant_category_from_web:
+            extract_receipt_batch.return_value = [
+                {
+                    "receipt_upload_id": self.app.config["storage"].create_receipt_upload(
+                        1,
+                        "receipt-legacy.jpg",
+                        "uploads/receipt-legacy.jpg",
+                    ),
+                    "merchant": "Corner-Shop",
+                    "transaction_date": "2026-04-23",
+                    "total_amount": 44.15,
+                    "category": "",
+                    "category_confidence": 0.0,
+                    "status": "needs_correction",
+                    "behavior_note": "",
+                    "item_tags": [],
+                }
+            ]
+
+            response = self.client.post(
+                "/api/upload-receipts",
+                data={"receipts": [(io.BytesIO(b"fake image"), "receipt-legacy.jpg")]},
+                content_type="multipart/form-data",
+            )
+
+        payload = response.get_json()
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(payload["receipts"][0]["category"], "Groceries")
+        self.assertEqual(payload["receipts"][0]["category_confidence"], 0.97)
+        self.assertEqual(payload["receipts"][0]["status"], "ready")
+        enrich_merchant_category_from_web.assert_not_called()
+
     def test_receipt_upload_skips_web_lookup_for_high_confidence_extracted_category(self):
         self._signup_and_login()
 
@@ -1284,6 +1338,46 @@ class AppRouteTests(unittest.TestCase):
         self.assertEqual(payload["receipts"][0]["status"], "needs_category")
         self.assertEqual(payload["receipts"][0]["category_confidence"], 0.0)
         enrich_merchant_category_from_web.assert_called_once_with("Unknown Corner Shop")
+
+    def test_receipt_upload_clears_low_confidence_category_when_merchant_is_blank(self):
+        self._signup_and_login()
+
+        with patch("app.extract_receipt_batch") as extract_receipt_batch, patch(
+            "app.enrich_merchant_category_from_web",
+            create=True,
+        ) as enrich_merchant_category_from_web:
+            extract_receipt_batch.return_value = [
+                {
+                    "receipt_upload_id": self.app.config["storage"].create_receipt_upload(
+                        1,
+                        "receipt-blank-merchant.jpg",
+                        "uploads/receipt-blank-merchant.jpg",
+                    ),
+                    "merchant": "",
+                    "transaction_date": "2026-04-23",
+                    "total_amount": 17.25,
+                    "category": "Dining",
+                    "category_confidence": 0.41,
+                    "status": "needs_correction",
+                    "behavior_note": "",
+                    "item_tags": [],
+                }
+            ]
+
+            response = self.client.post(
+                "/api/upload-receipts",
+                data={"receipts": [(io.BytesIO(b"fake image"), "receipt-blank-merchant.jpg")]},
+                content_type="multipart/form-data",
+            )
+
+        payload = response.get_json()
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(payload["receipts"][0]["merchant"], "")
+        self.assertEqual(payload["receipts"][0]["category"], "")
+        self.assertEqual(payload["receipts"][0]["category_confidence"], 0.0)
+        self.assertEqual(payload["receipts"][0]["status"], "needs_category")
+        enrich_merchant_category_from_web.assert_not_called()
 
     def test_readme_mentions_web_service_flow_and_public_demo_risk(self):
         readme = Path("README.md").read_text(encoding="utf-8")
