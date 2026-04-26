@@ -47,11 +47,21 @@ class _FallbackAgentClient:
         note_content = str(notes[0]["content"]).strip() if notes else ""
         merchant_reply = _merchant_rank_reply(message, context)
         topic_reply = _category_topic_reply(message, context)
+        blocked_category = _blocked_cut_category(message, category_breakdown)
 
         if merchant_reply:
             reply = merchant_reply
         elif topic_reply:
             reply = topic_reply
+        elif blocked_category:
+            reply = self._blocked_category_reply(
+                month_label=month_label,
+                blocked_category=blocked_category,
+                category_breakdown=category_breakdown,
+                recurring_total=recurring_total,
+                strongest_subscription=strongest_subscription,
+                behavioral_insights=behavioral_insights,
+            )
         elif behavioral_insights and any(token in message for token in {"pattern", "patterns", "behavior", "behaviour", "habit", "habits"}):
             reply = "Behavior patterns I see:\n- " + "\n- ".join(behavioral_insights[:3])
         elif referenced_subscription and (
@@ -167,6 +177,54 @@ class _FallbackAgentClient:
             lines.append(f"Note: {note_content}")
         if len(lines) == 1:
             return "Give me a concrete question about your spending, subscriptions, or monthly plan and I will answer from your saved data."
+        return "\n".join(lines)
+
+    @staticmethod
+    def _blocked_category_reply(
+        month_label: str,
+        blocked_category: str,
+        category_breakdown: list[dict],
+        recurring_total: float,
+        strongest_subscription: dict | None,
+        behavioral_insights: list[str],
+    ) -> str:
+        lines = [f"For {month_label}:"]
+        lines.append(f"Keep: treat {blocked_category} as required for now.")
+
+        alternative = _best_alternative_cut_category(blocked_category, category_breakdown)
+        if alternative:
+            lines.append(
+                f"Cut instead: {alternative['category']} at ${alternative['amount']:.2f} ({alternative['percentage']:.2f}% of tracked spending)."
+            )
+            lines.append(
+                f"Why: {alternative.get('budget_status', 'within budget')} and still one of the clearest places to move the month."
+            )
+            lines.append(
+                f"Move: put a hard cap on {alternative['category']} for the rest of the month and cut the obvious extras first."
+            )
+            return "\n".join(lines)
+
+        if strongest_subscription:
+            display_name = _display_merchant(str(strongest_subscription.get("merchant") or "that subscription"))
+            monthly_cost = float(strongest_subscription.get("monthly_equivalent") or 0)
+            lines.append(f"Cut instead: {display_name} at about ${monthly_cost:.2f}/month.")
+            lines.append("Why: it is easier to pause than a category you already told me is necessary.")
+            lines.append("Move: pause it this billing cycle and revisit next month.")
+            return "\n".join(lines)
+
+        if recurring_total > 0:
+            lines.append(f"Cut instead: recurring charges totaling ${recurring_total:.2f}/month.")
+            lines.append("Why: those are easier to stop than necessary travel.")
+            lines.append("Move: pick the weakest recurring expense and pause it first.")
+            return "\n".join(lines)
+
+        if behavioral_insights:
+            lines.append(f"Why: {behavioral_insights[0]}")
+            lines.append("Move: treat that pattern as the next place to cut since the blocked category is not available.")
+            return "\n".join(lines)
+
+        lines.append("Cut instead: your next discretionary category, not the one you already ruled out.")
+        lines.append("Move: tell me what category feels most optional and I will narrow it down.")
         return "\n".join(lines)
 
     @staticmethod
@@ -289,6 +347,66 @@ def _display_merchant(name: str) -> str:
     if cleaned.isupper():
         return cleaned.title().replace("'S", "'s")
     return cleaned
+
+
+def _blocked_cut_category(message: str, category_breakdown: list[dict]) -> str | None:
+    lowered = str(message).lower()
+    if not any(
+        phrase in lowered
+        for phrase in {
+            "can't cut",
+            "cannot cut",
+            "cant cut",
+            "need to keep",
+            "have to keep",
+            "is necessary",
+            "are necessary",
+            "have to attend",
+            "need that",
+            "need those",
+            "required",
+        }
+    ):
+        return None
+
+    for item in category_breakdown:
+        category = str(item.get("category") or "")
+        if category and category.lower() in lowered:
+            return category
+    return None
+
+
+def _best_alternative_cut_category(blocked_category: str, category_breakdown: list[dict]) -> dict | None:
+    discretionary_keywords = {
+        "shopping",
+        "dining",
+        "food & drink",
+        "entertainment",
+        "subscriptions",
+        "health & wellness",
+        "wellness",
+        "beauty",
+    }
+
+    ranked: list[tuple[float, dict]] = []
+    blocked = blocked_category.lower()
+    for item in category_breakdown:
+        category = str(item.get("category") or "")
+        if not category or category.lower() == blocked:
+            continue
+        score = float(item.get("amount") or 0)
+        if item.get("overspending"):
+            score += 200
+        if item.get("budget_status") == "OVER budget":
+            score += 100
+        if category.lower() in discretionary_keywords:
+            score += 150
+        ranked.append((score, item))
+
+    if not ranked:
+        return None
+    ranked.sort(key=lambda pair: pair[0], reverse=True)
+    return ranked[0][1]
 
 
 def _category_topic_reply(message: str, context: dict) -> str | None:

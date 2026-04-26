@@ -1032,6 +1032,46 @@ class AppRouteTests(unittest.TestCase):
         self.assertIn("Netflix", payload["reply"])
         self.assertIn("Save 200 for a trip", payload["reply"])
 
+    def test_ai_chatbot_pivots_to_other_cuttable_area_when_user_cannot_cut_travel(self):
+        self._signup_and_login()
+        self.client.post(
+            "/api/profile",
+            json={
+                "monthly_income": 2200,
+                "fixed_expenses": 900,
+                "budgeting_goal": "Spend less this month",
+            },
+        )
+        travel_csv = """Transaction Date,Description,Category,Amount
+04/01/2026,Wedding Flight,Travel,-420.00
+04/03/2026,Hotel Stay,Travel,-310.00
+04/05/2026,Weekend Shopping,Shopping,-260.00
+04/06/2026,Boutique Run,Shopping,-180.00
+04/07/2026,Restaurant Row,Dining,-140.00
+04/08/2026,NETFLIX.COM,Subscriptions,-18.99
+03/05/2026,Weekend Shopping,Shopping,-120.00
+03/06/2026,Restaurant Row,Dining,-90.00
+"""
+        self.client.post(
+            "/api/upload-statement",
+            data={"statement": (io.BytesIO(travel_csv.encode("utf-8")), "statement.csv")},
+            content_type="multipart/form-data",
+        )
+
+        response = self.client.post(
+            "/api/chat",
+            json={"message": "i can't cut travel, i have big wedding trips to attend"},
+        )
+        payload = response.get_json()
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("Keep:", payload["reply"])
+        self.assertIn("Travel", payload["reply"])
+        self.assertIn("Cut instead:", payload["reply"])
+        self.assertIn("Shopping", payload["reply"])
+        self.assertIn("Why:", payload["reply"])
+        self.assertIn("Move:", payload["reply"])
+
     def test_ai_chatbot_answers_monthly_gas_average_from_uploaded_history(self):
         self._signup_and_login()
         self.client.post(

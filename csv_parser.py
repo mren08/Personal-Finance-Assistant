@@ -27,7 +27,10 @@ class StatementCsvParser:
 
     def parse(self, file_path: str) -> List[CategorizedTransaction]:
         with open(file_path, "r", encoding="utf-8-sig", newline="") as f:
-            reader = csv.DictReader(f)
+            sample = f.read(2048)
+            f.seek(0)
+            delimiter = self._detect_delimiter(sample)
+            reader = csv.DictReader(f, delimiter=delimiter)
             if not reader.fieldnames:
                 raise ValueError("CSV is empty or missing headers.")
 
@@ -42,7 +45,11 @@ class StatementCsvParser:
                 if amount is None:
                     continue
 
-                # In your CSV format, expenses are negative and payments/credits are positive.
+                entry_type = (row.get("Type", "") or "").strip().lower()
+                if entry_type == "payment":
+                    continue
+
+                # Expenses are negative and credits/payments/returns are positive.
                 if amount >= 0:
                     continue
 
@@ -63,6 +70,14 @@ class StatementCsvParser:
                 )
 
             return transactions
+
+    @staticmethod
+    def _detect_delimiter(sample: str) -> str:
+        try:
+            dialect = csv.Sniffer().sniff(sample, delimiters=",\t")
+            return dialect.delimiter
+        except csv.Error:
+            return "\t" if "\t" in sample else ","
 
     @staticmethod
     def category_totals(transactions: List[CategorizedTransaction]) -> Dict[str, float]:
