@@ -8,6 +8,7 @@ from pathlib import Path
 from unittest.mock import Mock, patch
 
 import app as app_module
+from werkzeug.datastructures import FileStorage
 
 
 SAMPLE_CSV = """Transaction Date,Description,Category,Amount
@@ -368,6 +369,66 @@ class AppRouteTests(unittest.TestCase):
         self.assertEqual(len(payload["profile"]["pending_receipts"]), 1)
         self.assertEqual(payload["profile"]["pending_receipts"][0]["merchant"], "Trader Joe's")
         self.assertEqual(payload["profile"]["pending_receipts"][0]["status"], "ready")
+
+    def test_extract_receipt_batch_uses_image_extraction_helper(self):
+        storage = self.app.config["storage"]
+        user_id = storage.create_user("receipt@example.com", "secret123")
+        uploaded = FileStorage(
+            stream=io.BytesIO(b"fake image bytes"),
+            filename="cafe-receipt.jpg",
+            content_type="image/jpeg",
+        )
+
+        with patch("app._extract_receipt_card_from_image") as extract_receipt_card:
+            extract_receipt_card.return_value = {
+                "merchant": "Maman",
+                "transaction_date": "2026-04-27",
+                "total_amount": 14.25,
+                "category": "Dining",
+                "category_confidence": 0.91,
+                "status": "ready",
+                "behavior_note": "This is your 5th dining expense this week.",
+                "item_tags": ["coffee", "pastry"],
+            }
+
+            cards = app_module.extract_receipt_batch([uploaded], storage, user_id)
+
+        self.assertEqual(len(cards), 1)
+        self.assertEqual(cards[0]["merchant"], "Maman")
+        self.assertEqual(cards[0]["category"], "Dining")
+        self.assertEqual(cards[0]["status"], "ready")
+        self.assertIn("receipt_upload_id", cards[0])
+        extract_receipt_card.assert_called_once()
+
+    def test_receipt_upload_route_uses_real_batch_helper_with_image_extraction(self):
+        self._signup_and_login()
+
+        with patch("app._extract_receipt_card_from_image") as extract_receipt_card:
+            extract_receipt_card.return_value = {
+                "merchant": "Sweetgreen",
+                "transaction_date": "2026-04-27",
+                "total_amount": 18.50,
+                "category": "Dining",
+                "category_confidence": 0.94,
+                "status": "ready",
+                "behavior_note": "This is your 5th dining expense this week.",
+                "item_tags": ["salad"],
+            }
+
+            response = self.client.post(
+                "/api/upload-receipts",
+                data={"receipts": [(io.BytesIO(b"fake image"), "sweetgreen.jpg")]},
+                content_type="multipart/form-data",
+            )
+
+        payload = response.get_json()
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(len(payload["receipts"]), 1)
+        self.assertEqual(payload["receipts"][0]["merchant"], "Sweetgreen")
+        self.assertEqual(payload["receipts"][0]["category"], "Dining")
+        self.assertEqual(payload["receipts"][0]["status"], "ready")
+        self.assertEqual(len(payload["profile"]["pending_receipts"]), 1)
 
     def test_receipt_upload_response_separates_error_cards_from_persisted_pending_receipts(self):
         self._signup_and_login()
@@ -993,9 +1054,9 @@ class AppRouteTests(unittest.TestCase):
         self.assertIn("Dining", payload["reply"])
         self.assertIn("Netflix", payload["reply"])
         self.assertIn("Spend less on dining", payload["reply"])
-        self.assertIn("Focus:", payload["reply"])
-        self.assertIn("Next cut:", payload["reply"])
-        self.assertIn("Action:", payload["reply"])
+        self.assertIn("What I see:", payload["reply"])
+        self.assertIn("Best cut:", payload["reply"])
+        self.assertIn("Next move:", payload["reply"])
 
     def test_ai_chatbot_can_build_a_tight_plan_from_saved_context(self):
         self._signup_and_login()
@@ -1065,12 +1126,91 @@ class AppRouteTests(unittest.TestCase):
         payload = response.get_json()
 
         self.assertEqual(response.status_code, 200)
-        self.assertIn("Keep:", payload["reply"])
+        self.assertIn("What I see:", payload["reply"])
         self.assertIn("Travel", payload["reply"])
-        self.assertIn("Cut instead:", payload["reply"])
+        self.assertIn("Best cut:", payload["reply"])
         self.assertIn("Shopping", payload["reply"])
-        self.assertIn("Why:", payload["reply"])
-        self.assertIn("Move:", payload["reply"])
+        self.assertIn("Why it matters:", payload["reply"])
+        self.assertIn("Next move:", payload["reply"])
+
+    def test_ai_chatbot_cut_advice_references_running_history_before_pivoting(self):
+        self._signup_and_login()
+        self.client.post(
+            "/api/profile",
+            json={
+                "monthly_income": 2200,
+                "fixed_expenses": 900,
+                "budgeting_goal": "Spend less this month",
+            },
+        )
+        travel_csv = """Transaction Date,Description,Category,Amount
+04/01/2026,Wedding Flight,Travel,-420.00
+04/03/2026,Hotel Stay,Travel,-310.00
+04/05/2026,Weekend Shopping,Shopping,-260.00
+04/06/2026,Boutique Run,Shopping,-180.00
+04/07/2026,Restaurant Row,Dining,-140.00
+04/08/2026,NETFLIX.COM,Subscriptions,-18.99
+03/05/2026,Weekend Shopping,Shopping,-120.00
+03/06/2026,Restaurant Row,Dining,-90.00
+"""
+        self.client.post(
+            "/api/upload-statement",
+            data={"statement": (io.BytesIO(travel_csv.encode("utf-8")), "statement.csv")},
+            content_type="multipart/form-data",
+        )
+
+        response = self.client.post(
+            "/api/chat",
+            json={"message": "if i want to cut travel by 185 this month, where should i cut?"},
+        )
+        payload = response.get_json()
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("What I see:", payload["reply"])
+        self.assertIn("Wedding Flight", payload["reply"])
+        self.assertIn("Hotel Stay", payload["reply"])
+        self.assertIn("Why I would not cut it first:", payload["reply"])
+        self.assertIn("Better cut instead:", payload["reply"])
+        self.assertIn("Shopping", payload["reply"])
+        self.assertIn("Next move:", payload["reply"])
+
+    def test_ai_chatbot_treats_one_off_category_as_weak_cut_target_across_any_category(self):
+        self._signup_and_login()
+        self.client.post(
+            "/api/profile",
+            json={
+                "monthly_income": 2200,
+                "fixed_expenses": 900,
+                "budgeting_goal": "Spend less this month",
+            },
+        )
+        statement_csv = """Transaction Date,Description,Category,Amount
+04/01/2026,Broadway Tickets,Entertainment,-260.00
+04/02/2026,Comedy Show,Entertainment,-180.00
+04/05/2026,Weekend Shopping,Shopping,-220.00
+04/06/2026,Boutique Run,Shopping,-170.00
+03/05/2026,Weekend Shopping,Shopping,-120.00
+03/06/2026,Boutique Run,Shopping,-90.00
+"""
+        self.client.post(
+            "/api/upload-statement",
+            data={"statement": (io.BytesIO(statement_csv.encode("utf-8")), "statement.csv")},
+            content_type="multipart/form-data",
+        )
+
+        response = self.client.post(
+            "/api/chat",
+            json={"message": "should i cut entertainment this month?"},
+        )
+        payload = response.get_json()
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("What I see:", payload["reply"])
+        self.assertIn("Broadway Tickets", payload["reply"])
+        self.assertIn("Comedy Show", payload["reply"])
+        self.assertIn("planned one-off", payload["reply"].lower())
+        self.assertIn("Better cut instead:", payload["reply"])
+        self.assertIn("Shopping", payload["reply"])
 
     def test_ai_chatbot_answers_monthly_gas_average_from_uploaded_history(self):
         self._signup_and_login()
@@ -1126,7 +1266,7 @@ class AppRouteTests(unittest.TestCase):
         payload = response.get_json()
 
         self.assertEqual(response.status_code, 200)
-        self.assertIn("which city you are in", payload["reply"].lower())
+        self.assertIn("what i need: your city", payload["reply"].lower())
         self.assertIn("yoga", payload["reply"].lower())
         self.assertIn("community rec", payload["reply"].lower())
 
@@ -1155,9 +1295,9 @@ class AppRouteTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertIn("Boston", payload["reply"])
-        self.assertIn("\n1.", payload["reply"])
-        self.assertIn("\n2.", payload["reply"])
-        self.assertIn("\n3.", payload["reply"])
+        self.assertIn("Closest match:", payload["reply"])
+        self.assertIn("Budget option:", payload["reply"])
+        self.assertIn("Flexible option:", payload["reply"])
         self.assertIn("yoga", payload["reply"].lower())
         self.assertIn("ymca", payload["reply"].lower())
 

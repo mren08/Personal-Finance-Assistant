@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import json
 import math
 import os
@@ -48,6 +49,7 @@ class _FallbackAgentClient:
         merchant_reply = _merchant_rank_reply(message, context)
         topic_reply = _category_topic_reply(message, context)
         blocked_category = _blocked_cut_category(message, category_breakdown)
+        category_history_reply = _category_cut_history_reply(message, context)
 
         if merchant_reply:
             reply = merchant_reply
@@ -62,6 +64,8 @@ class _FallbackAgentClient:
                 strongest_subscription=strongest_subscription,
                 behavioral_insights=behavioral_insights,
             )
+        elif category_history_reply:
+            reply = category_history_reply
         elif behavioral_insights and any(token in message for token in {"pattern", "patterns", "behavior", "behaviour", "habit", "habits"}):
             reply = "Behavior patterns I see:\n- " + "\n- ".join(behavioral_insights[:3])
         elif referenced_subscription and (
@@ -153,22 +157,22 @@ class _FallbackAgentClient:
         lines = [f"For {month_label}:"]
         if biggest:
             lines.append(
-                f"Focus: {biggest['category']} is highest at ${biggest['amount']:.2f} ({biggest['percentage']:.2f}%)."
+                f"What I see: {biggest['category']} is highest at ${biggest['amount']:.2f} ({biggest['percentage']:.2f}%)."
             )
         if strongest_subscription:
             display_name = _display_merchant(str(strongest_subscription.get("merchant") or ""))
             lines.append(
-                f"Next cut: {display_name} costs about ${float(strongest_subscription.get('monthly_equivalent') or 0):.2f}/month."
+                f"Best cut: {display_name} costs about ${float(strongest_subscription.get('monthly_equivalent') or 0):.2f}/month."
             )
         elif recurring_total > 0:
-            lines.append(f"Next cut: recurring charges are still costing ${recurring_total:.2f}/month.")
+            lines.append(f"Best cut: recurring charges are still costing ${recurring_total:.2f}/month.")
         if isinstance(leftover_money, (int, float)):
             if float(leftover_money) < 0:
-                lines.append(f"Reality: you are ${abs(float(leftover_money)):.2f} over after fixed expenses.")
-                lines.append("Action: freeze discretionary spending for a few days and cut the biggest leak first.")
+                lines.append(f"Why it matters: you are ${abs(float(leftover_money)):.2f} over after fixed expenses.")
+                lines.append("Next move: freeze discretionary spending for a few days and cut the biggest leak first.")
             else:
-                lines.append(f"Reality: you have ${float(leftover_money):.2f} left after fixed expenses.")
-                lines.append("Action: decide now whether that money goes to savings, debt payoff, or retirement before it disappears.")
+                lines.append(f"Why it matters: you have ${float(leftover_money):.2f} left after fixed expenses.")
+                lines.append("Next move: decide now whether that money goes to savings, debt payoff, or retirement before it disappears.")
         if goal:
             lines.append(f"Goal: {goal}.")
         if behavioral_insights:
@@ -189,42 +193,42 @@ class _FallbackAgentClient:
         behavioral_insights: list[str],
     ) -> str:
         lines = [f"For {month_label}:"]
-        lines.append(f"Keep: treat {blocked_category} as required for now.")
+        lines.append(f"What I see: you want to treat {blocked_category} as required for now.")
 
         alternative = _best_alternative_cut_category(blocked_category, category_breakdown)
         if alternative:
             lines.append(
-                f"Cut instead: {alternative['category']} at ${alternative['amount']:.2f} ({alternative['percentage']:.2f}% of tracked spending)."
+                f"Best cut: {alternative['category']} at ${alternative['amount']:.2f} ({alternative['percentage']:.2f}% of tracked spending)."
             )
             lines.append(
-                f"Why: {alternative.get('budget_status', 'within budget')} and still one of the clearest places to move the month."
+                f"Why it matters: {alternative.get('budget_status', 'within budget')} and still one of the clearest places to move the month."
             )
             lines.append(
-                f"Move: put a hard cap on {alternative['category']} for the rest of the month and cut the obvious extras first."
+                f"Next move: put a hard cap on {alternative['category']} for the rest of the month and cut the obvious extras first."
             )
             return "\n".join(lines)
 
         if strongest_subscription:
             display_name = _display_merchant(str(strongest_subscription.get("merchant") or "that subscription"))
             monthly_cost = float(strongest_subscription.get("monthly_equivalent") or 0)
-            lines.append(f"Cut instead: {display_name} at about ${monthly_cost:.2f}/month.")
-            lines.append("Why: it is easier to pause than a category you already told me is necessary.")
-            lines.append("Move: pause it this billing cycle and revisit next month.")
+            lines.append(f"Best cut: {display_name} at about ${monthly_cost:.2f}/month.")
+            lines.append("Why it matters: it is easier to pause than a category you already told me is necessary.")
+            lines.append("Next move: pause it this billing cycle and revisit next month.")
             return "\n".join(lines)
 
         if recurring_total > 0:
-            lines.append(f"Cut instead: recurring charges totaling ${recurring_total:.2f}/month.")
-            lines.append("Why: those are easier to stop than necessary travel.")
-            lines.append("Move: pick the weakest recurring expense and pause it first.")
+            lines.append(f"Best cut: recurring charges totaling ${recurring_total:.2f}/month.")
+            lines.append("Why it matters: those are easier to stop than a category you already ruled out.")
+            lines.append("Next move: pick the weakest recurring expense and pause it first.")
             return "\n".join(lines)
 
         if behavioral_insights:
-            lines.append(f"Why: {behavioral_insights[0]}")
-            lines.append("Move: treat that pattern as the next place to cut since the blocked category is not available.")
+            lines.append(f"Why it matters: {behavioral_insights[0]}")
+            lines.append("Next move: treat that pattern as the next place to cut since the blocked category is not available.")
             return "\n".join(lines)
 
-        lines.append("Cut instead: your next discretionary category, not the one you already ruled out.")
-        lines.append("Move: tell me what category feels most optional and I will narrow it down.")
+        lines.append("Best cut: your next discretionary category, not the one you already ruled out.")
+        lines.append("Next move: tell me what category feels most optional and I will narrow it down.")
         return "\n".join(lines)
 
     @staticmethod
@@ -235,21 +239,23 @@ class _FallbackAgentClient:
 
         if not city:
             return (
-                f"If you want cheaper alternatives to {display_name}, tell me which city you are in. "
-                "Then I can narrow this to lower-cost options like yoga, gym classes, community rec programs, or ClassPass-style options in the right area."
+                f"For {month_label}:\n"
+                f"What I need: your city.\n"
+                f"Why it matters: I can narrow {display_name} to lower-cost local options instead of giving generic alternatives.\n"
+                "Next move: tell me your city and I will point you to cheaper options like yoga, gym classes, community rec programs, or ClassPass-style options."
             )
 
         lines = [f"Cheaper options than {display_name} in {city}:"]
         if "wellness" in category or "fitness" in category or "health" in category:
-            lines.append("1. Check yoga and mat Pilates studios first. They are often meaningfully cheaper than boutique reformer memberships.")
-            lines.append("2. Check YMCA, community rec, or basic gym class schedules for lower-cost weekly classes.")
-            lines.append("3. Check ClassPass-style options or intro packs if you want variety without another full membership.")
+            lines.append("Closest match: yoga and mat Pilates studios are often meaningfully cheaper than boutique reformer memberships.")
+            lines.append("Budget option: YMCA, community rec, or basic gym class schedules usually cost less.")
+            lines.append("Flexible option: ClassPass-style options or intro packs if you want variety without another full membership.")
         else:
-            lines.append("1. Check lower-cost local options that give you the same benefit first.")
-            lines.append("2. Check whether a lighter plan or class pack works instead of a full membership.")
-            lines.append("3. Check flexible pay-as-you-go options before committing to another recurring bill.")
-        lines.append(f"Cost: {display_name} is about ${monthly_cost:.2f}/month right now.")
-        lines.append("Next: tell me whether you want cheapest, closest match, or best value, and I will narrow it further.")
+            lines.append("Closest match: check lower-cost local options that give you the same benefit first.")
+            lines.append("Middle ground: see whether a lighter plan or class pack works instead of a full membership.")
+            lines.append("Flexible option: check pay-as-you-go choices before committing to another recurring bill.")
+        lines.append(f"Current cost: {display_name} is about ${monthly_cost:.2f}/month right now.")
+        lines.append("Next move: tell me whether you want cheapest, closest match, or best value, and I will narrow it further.")
         return "\n".join(lines)
 
     @staticmethod
@@ -306,23 +312,42 @@ class _FallbackAgentClient:
         monthly_cost = float(subscription.get("monthly_equivalent") or 0)
         category = str(subscription.get("category") or "Recurring")
         if isinstance(leftover_money, (int, float)) and float(leftover_money) < 0:
-            return (
-                f"I would cut {display_name}. It is costing about ${monthly_cost:.2f} per month, "
-                f"and you are already over budget in {month_label}. Keeping it only makes sense if it is genuinely higher priority than the rest of your cuts."
+            return "\n".join(
+                [
+                    f"For {month_label}:",
+                    f"Cost: {display_name} is about ${monthly_cost:.2f}/month.",
+                    "Keep or cut: cut it first.",
+                    "Why it matters: you are already over budget, so this is easier to challenge than most fixed spending.",
+                    "Next move: pause it this cycle unless it is clearly higher priority than your other cuts.",
+                ]
             )
         if biggest and category.lower() == str(biggest.get("category") or "").lower():
-            return (
-                f"I would seriously question keeping {display_name}. It is about ${monthly_cost:.2f} per month "
-                f"and it sits inside your biggest pressure category for {month_label}."
+            return "\n".join(
+                [
+                    f"For {month_label}:",
+                    f"Cost: {display_name} is about ${monthly_cost:.2f}/month.",
+                    f"Use case: it sits inside your biggest pressure category in {month_label}.",
+                    "Keep or cut: lean toward cutting it.",
+                    "Next move: check how often you actually use it before the next billing date.",
+                ]
             )
         if goal:
-            return (
-                f"Keep {display_name} only if you use it enough to justify about ${monthly_cost:.2f} per month. "
-                f"Given your goal to {goal.lower()}, it is a reasonable cut if usage is inconsistent."
+            return "\n".join(
+                [
+                    f"For {month_label}:",
+                    f"Cost: {display_name} is about ${monthly_cost:.2f}/month.",
+                    f"Goal: {goal}.",
+                    "Keep or cut: keep it only if usage is consistent.",
+                    "Next move: if usage is spotty, cut it and move that money toward the goal instead.",
+                ]
             )
-        return (
-            f"Keep {display_name} only if you use it consistently. It is costing about ${monthly_cost:.2f} per month, "
-            f"so if it is easy to pause, I would lean toward cutting it."
+        return "\n".join(
+            [
+                f"For {month_label}:",
+                f"Cost: {display_name} is about ${monthly_cost:.2f}/month.",
+                "Keep or cut: keep it only if you use it consistently.",
+                "Next move: if it is easy to pause, I would lean toward cutting it first.",
+            ]
         )
 
 
@@ -407,6 +432,111 @@ def _best_alternative_cut_category(blocked_category: str, category_breakdown: li
         return None
     ranked.sort(key=lambda pair: pair[0], reverse=True)
     return ranked[0][1]
+
+
+def _category_cut_history_reply(message: str, context: dict) -> str | None:
+    lowered = str(message).lower()
+    if not any(token in lowered for token in {"cut", "reduce", "trim"}):
+        return None
+
+    category_breakdown = context.get("category_breakdown") or []
+    category = next(
+        (
+            str(item.get("category"))
+            for item in category_breakdown
+            if str(item.get("category") or "").lower() in lowered
+        ),
+        None,
+    )
+    if not category:
+        return None
+
+    month_label = context.get("selected_month_label") or "this month"
+    transactions = context.get("transactions") or []
+    category_transactions = [
+        item for item in transactions if str(item.get("category") or "").lower() == category.lower()
+    ]
+    if not category_transactions:
+        return None
+
+    total = round(sum(float(item.get("amount") or 0) for item in category_transactions), 2)
+    top_descriptions = sorted(
+        category_transactions,
+        key=lambda item: float(item.get("amount") or 0),
+        reverse=True,
+    )[:2]
+    description_names = ", ".join(str(item.get("description") or "Unknown") for item in top_descriptions)
+
+    all_transactions = context.get("all_transactions") or transactions
+    necessity_heavy = _category_looks_planned_or_necessary(
+        category=category,
+        category_transactions=category_transactions,
+        all_transactions=all_transactions,
+    )
+    alternative = _best_alternative_cut_category(category, category_breakdown)
+
+    lines = [f"For {month_label}:"]
+    lines.append(
+        f"What I see: {category} is ${total:.2f} across {len(category_transactions)} charges, mainly {description_names}."
+    )
+    if necessity_heavy:
+        lines.append(
+            f"Why I would not cut it first: your own history makes {category} look more like a planned one-off or necessary bucket than an easy routine leak."
+        )
+    else:
+        lines.append(
+            f"Why I would cut it first: your own history makes {category} look discretionary enough to move the month quickly."
+        )
+
+    if necessity_heavy and alternative:
+        lines.append(
+            f"Better cut instead: {alternative['category']} at ${alternative['amount']:.2f} ({alternative['percentage']:.2f}% of tracked spending)."
+        )
+        lines.append(
+            f"Next move: start with the biggest {alternative['category'].lower()} charge and put a hard cap on the rest of the month."
+        )
+    else:
+        lines.append(f"Next move: pick the largest {category.lower()} charge first and cut the extras around it, not every line item blindly.")
+    return "\n".join(lines)
+
+
+def _category_looks_planned_or_necessary(
+    category: str,
+    category_transactions: list[dict],
+    all_transactions: list[dict],
+) -> bool:
+    category_lower = category.lower()
+    if category_lower in {"groceries", "health & wellness", "education"}:
+        return True
+
+    total = round(sum(float(item.get("amount") or 0) for item in category_transactions), 2)
+    if total <= 0:
+        return False
+
+    top_two_total = sum(
+        float(item.get("amount") or 0)
+        for item in sorted(category_transactions, key=lambda item: float(item.get("amount") or 0), reverse=True)[:2]
+    )
+    category_months = {
+        str(item.get("date") or "")[:7]
+        for item in all_transactions
+        if str(item.get("category") or "").lower() == category_lower and item.get("date")
+    }
+    if (
+        len(category_transactions) <= 3
+        and len(category_months) <= 1
+        and top_two_total >= total * 0.7
+    ):
+        return True
+
+    descriptions = " ".join(str(item.get("description") or "").lower() for item in category_transactions)
+    necessary_keywords = {
+        "travel": {"flight", "hotel", "wedding", "airline", "delta", "united", "jetblue", "american"},
+        "gas": {"bp", "shell", "exxon", "mobil", "fuel", "gas"},
+        "transport": {"commuter", "parking", "train", "subway"},
+    }
+    keywords = necessary_keywords.get(category_lower, set())
+    return any(keyword in descriptions for keyword in keywords)
 
 
 def _category_topic_reply(message: str, context: dict) -> str | None:
@@ -583,7 +713,11 @@ def _extract_city_from_conversation(message: str, context: dict) -> str | None:
 
     recent_messages = list(context.get("messages") or [])[-4:]
     asked_for_city = any(
-        message_row.get("role") == "assistant" and "which city" in str(message_row.get("content") or "").lower()
+        message_row.get("role") == "assistant"
+        and any(
+            phrase in str(message_row.get("content") or "").lower()
+            for phrase in {"which city", "your city", "tell me your city"}
+        )
         for message_row in recent_messages
     )
     if asked_for_city and re.fullmatch(r"[A-Za-z][A-Za-z .'-]{1,40}", raw):
@@ -599,8 +733,14 @@ def _is_subscription_alternative_follow_up(message: str, context: dict) -> bool:
     recent_messages = list(context.get("messages") or [])[-4:]
     return any(
         message_row.get("role") == "assistant"
-        and "cheaper alternatives" in str(message_row.get("content") or "").lower()
-        and "which city" in str(message_row.get("content") or "").lower()
+        and (
+            "cheaper alternatives" in str(message_row.get("content") or "").lower()
+            or "what i need: your city" in str(message_row.get("content") or "").lower()
+        )
+        and any(
+            phrase in str(message_row.get("content") or "").lower()
+            for phrase in {"which city", "your city", "tell me your city"}
+        )
         for message_row in recent_messages
     )
 
@@ -869,23 +1009,167 @@ def extract_receipt_batch(files: list[Any], storage: Storage, user_id: int) -> l
                 }
             )
             continue
-        results.append(
-            {
-                "receipt_upload_id": receipt_upload_id,
-                "merchant": "",
-                "transaction_date": "",
-                "total_amount": 0.0,
-                "category": "",
-                "category_confidence": 0.0,
-                "status": "needs_correction",
-                "behavior_note": "",
-                "item_tags": [],
-            }
-        )
+        try:
+            extracted = _extract_receipt_card_from_image(uploaded_file, filename)
+        except Exception as exc:
+            extracted = _empty_receipt_card(str(exc))
+        results.append({"receipt_upload_id": receipt_upload_id, **extracted})
     return results
 
 
 _RECEIPT_CATEGORY_READY_CONFIDENCE = 0.85
+
+
+def _empty_receipt_card(behavior_note: str = "") -> dict[str, Any]:
+    return {
+        "merchant": "",
+        "transaction_date": "",
+        "total_amount": 0.0,
+        "category": "",
+        "category_confidence": 0.0,
+        "status": "needs_correction",
+        "behavior_note": behavior_note,
+        "item_tags": [],
+    }
+
+
+def _receipt_candidate_models() -> list[str]:
+    preferred = str(os.getenv("OPENAI_MODEL", "")).strip()
+    models = [preferred] if preferred else []
+    models.extend(["gpt-5.4-mini", "gpt-5-mini", "gpt-4.1-mini"])
+
+    deduped: list[str] = []
+    for model in models:
+        if model and model not in deduped:
+            deduped.append(model)
+    return deduped
+
+
+def _parse_receipt_json_response(text: str) -> dict[str, Any]:
+    raw = str(text or "").strip()
+    if not raw:
+        raise ValueError("Empty receipt extraction response.")
+
+    try:
+        parsed = json.loads(raw)
+        if isinstance(parsed, dict):
+            return parsed
+    except json.JSONDecodeError:
+        pass
+
+    fenced = re.search(r"```(?:json)?\s*(\{.*\})\s*```", raw, re.DOTALL)
+    if fenced:
+        parsed = json.loads(fenced.group(1))
+        if isinstance(parsed, dict):
+            return parsed
+
+    object_match = re.search(r"(\{.*\})", raw, re.DOTALL)
+    if object_match:
+        parsed = json.loads(object_match.group(1))
+        if isinstance(parsed, dict):
+            return parsed
+
+    raise ValueError("Receipt extraction response did not contain valid JSON.")
+
+
+def _normalize_receipt_card(payload: dict[str, Any]) -> dict[str, Any]:
+    merchant = str(payload.get("merchant") or "").strip()
+    transaction_date = str(payload.get("transaction_date") or "").strip()
+    total_amount_raw = payload.get("total_amount")
+    try:
+        total_amount = round(float(total_amount_raw), 2)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("Receipt extractor did not return a valid total amount.") from exc
+    if total_amount <= 0:
+        raise ValueError("Receipt extractor did not return a valid total amount.")
+
+    if transaction_date:
+        try:
+            datetime.strptime(transaction_date, "%Y-%m-%d")
+        except ValueError as exc:
+            raise ValueError("Receipt extractor returned an invalid transaction date.") from exc
+
+    category = str(payload.get("category") or "").strip()
+    try:
+        category_confidence = round(float(payload.get("category_confidence") or 0.0), 2)
+    except (TypeError, ValueError):
+        category_confidence = 0.0
+    category_confidence = max(0.0, min(category_confidence, 1.0))
+
+    status = str(payload.get("status") or "needs_correction").strip() or "needs_correction"
+    behavior_note = str(payload.get("behavior_note") or "").strip()
+    item_tags_raw = payload.get("item_tags") or []
+    item_tags = [str(tag).strip() for tag in item_tags_raw if str(tag).strip()]
+
+    return {
+        "merchant": merchant,
+        "transaction_date": transaction_date,
+        "total_amount": total_amount,
+        "category": category,
+        "category_confidence": category_confidence,
+        "status": status,
+        "behavior_note": behavior_note,
+        "item_tags": item_tags,
+    }
+
+
+def _extract_receipt_card_from_image(uploaded_file: Any, filename: str) -> dict[str, Any]:
+    api_key = str(os.getenv("OPENAI_API_KEY", "")).strip()
+    if not api_key:
+        return _empty_receipt_card("Receipt extraction needs OPENAI_API_KEY configured.")
+
+    image_bytes = uploaded_file.read()
+    if not image_bytes:
+        return _empty_receipt_card("Receipt image file was empty.")
+
+    try:
+        uploaded_file.stream.seek(0)
+    except Exception:
+        pass
+
+    mime_type = str(getattr(uploaded_file, "mimetype", "") or "").strip() or "image/jpeg"
+    image_base64 = base64.b64encode(image_bytes).decode("ascii")
+    data_url = f"data:{mime_type};base64,{image_base64}"
+
+    prompt = """
+Extract this receipt into JSON for a budgeting app.
+Return valid JSON only with:
+- merchant: string
+- transaction_date: string in YYYY-MM-DD when visible, else ""
+- total_amount: positive number
+- category: one short category guess like Dining, Groceries, Travel, Shopping, Wellness, Entertainment, Other
+- category_confidence: number from 0 to 1
+- status: "ready" if merchant/date/total are usable, otherwise "needs_correction"
+- behavior_note: one short sentence if the receipt itself suggests a useful behavioral note, else ""
+- item_tags: short array of purchased item keywords or spend hints
+Use the final total paid, not subtotal.
+""".strip()
+
+    from openai import OpenAI
+
+    client = OpenAI(api_key=api_key)
+    last_error = None
+    for model in _receipt_candidate_models():
+        try:
+            response = client.responses.create(
+                model=model,
+                input=[
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "input_text", "text": prompt},
+                            {"type": "input_image", "image_url": data_url},
+                        ],
+                    }
+                ],
+            )
+            output_text = getattr(response, "output_text", "")
+            return _normalize_receipt_card(_parse_receipt_json_response(output_text))
+        except Exception as exc:
+            last_error = exc
+            continue
+
+    return _empty_receipt_card("Could not automatically read this receipt right now.")
 
 
 def _infer_local_receipt_category(merchant: str, receipt_text: str = "") -> dict[str, Any]:
