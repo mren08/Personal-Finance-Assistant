@@ -112,7 +112,18 @@ The app treats negative amounts as expenses, ignores non-expense rows (like paym
 
 ## Receipt Uploads
 
-Signed-in users can upload one or more receipt images from the dashboard.
+Signed-in users can upload one or more receipt photos/PDFs from the dashboard.
+
+Supported receipt formats:
+
+- JPG
+- JPEG
+- PNG
+- WEBP
+- HEIC
+- PDF
+
+PDF receipts use page 1 only.
 
 For each receipt, the app extracts:
 - merchant

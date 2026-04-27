@@ -283,6 +283,8 @@ class AppRouteTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertIn(b"Upload receipts", response.data)
+        self.assertIn(b"receipt photos/PDF", response.data)
+        self.assertIn(b'accept="image/*,.pdf,application/pdf"', response.data)
         self.assertIn(b"receipt-review-list", response.data)
 
     def test_approved_receipt_disappears_from_pending_review_queue(self):
@@ -1535,6 +1537,89 @@ class AppRouteTests(unittest.TestCase):
         self.assertIn("id", payload["receipts"][0])
         self.assertIn("id", payload["receipts"][1])
 
+    def test_receipt_upload_accepts_pdf_and_routes_page_one_through_extractor(self):
+        self._signup_and_login()
+
+        with patch("app._extract_receipt_card_from_image") as extract_receipt_card:
+            extract_receipt_card.return_value = {
+                "merchant": "Maman",
+                "transaction_date": "2026-04-27",
+                "total_amount": 14.25,
+                "category": "Dining",
+                "category_confidence": 0.92,
+                "status": "ready",
+                "behavior_note": "",
+                "item_tags": ["latte"],
+            }
+            response = self.client.post(
+                "/api/upload-receipts",
+                data={"receipts": [(io.BytesIO(b"%PDF-1.4 fake"), "receipt.pdf")]},
+                content_type="multipart/form-data",
+            )
+
+        payload = response.get_json()
+        receipt = payload["receipts"][0]
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(len(payload["receipts"]), 1)
+        self.assertEqual(receipt["status"], "ready")
+        self.assertIn("id", receipt)
+        extract_receipt_card.assert_called_once()
+
+    def test_receipt_upload_rejects_unsupported_format_as_error_card(self):
+        self._signup_and_login()
+
+        response = self.client.post(
+            "/api/upload-receipts",
+            data={"receipts": [(io.BytesIO(b"plain text"), "receipt.txt")]},
+            content_type="multipart/form-data",
+        )
+
+        payload = response.get_json()
+        receipt = payload["receipts"][0]
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(len(payload["receipts"]), 1)
+        self.assertEqual(receipt["status"], "error")
+        self.assertIn("Unsupported receipt format", receipt["behavior_note"])
+        self.assertNotIn("id", receipt)
+
+    def test_receipt_upload_mixed_batch_keeps_valid_pdf_when_other_file_is_unsupported(self):
+        self._signup_and_login()
+
+        with patch("app._extract_receipt_card_from_image") as extract_receipt_card:
+            extract_receipt_card.return_value = {
+                "merchant": "Sweetgreen",
+                "transaction_date": "2026-04-27",
+                "total_amount": 18.50,
+                "category": "Dining",
+                "category_confidence": 0.94,
+                "status": "ready",
+                "behavior_note": "",
+                "item_tags": ["salad"],
+            }
+            response = self.client.post(
+                "/api/upload-receipts",
+                data={
+                    "receipts": [
+                        (io.BytesIO(b"plain text"), "bad.txt"),
+                        (io.BytesIO(b"%PDF-1.4 fake"), "good.pdf"),
+                    ]
+                },
+                content_type="multipart/form-data",
+            )
+
+        payload = response.get_json()
+        bad_receipt, good_receipt = payload["receipts"]
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(len(payload["receipts"]), 2)
+        self.assertEqual(bad_receipt["status"], "error")
+        self.assertIn("Unsupported receipt format", bad_receipt["behavior_note"])
+        self.assertEqual(good_receipt["status"], "ready")
+        self.assertIn("id", good_receipt)
+        self.assertNotIn("id", bad_receipt)
+
     def test_receipt_review_allows_approving_uploaded_receipt_with_corrected_fields(self):
         self._signup_and_login()
 
@@ -2013,6 +2098,18 @@ class AppRouteTests(unittest.TestCase):
         self.assertIn("forgot password", readme)
         self.assertIn("reset link", readme)
         self.assertIn("logging mailer", readme)
+
+    def test_readme_documents_supported_receipt_formats_and_pdf_page_one_only(self):
+        readme = Path("README.md").read_text(encoding="utf-8")
+
+        self.assertIn("receipt photos/PDF", readme)
+        self.assertIn("- JPG", readme)
+        self.assertIn("- JPEG", readme)
+        self.assertIn("- PNG", readme)
+        self.assertIn("- WEBP", readme)
+        self.assertIn("- HEIC", readme)
+        self.assertIn("- PDF", readme)
+        self.assertIn("page 1 only", readme.lower())
 
 
 if __name__ == "__main__":

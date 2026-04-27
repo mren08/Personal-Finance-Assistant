@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import io
 import json
 import math
 import os
@@ -993,6 +994,7 @@ def extract_receipt_batch(files: list[Any], storage: Storage, user_id: int) -> l
     results: list[dict[str, Any]] = []
     for uploaded_file in files:
         filename = secure_filename(uploaded_file.filename or "receipt.jpg") or "receipt.jpg"
+        unsupported_reason = _unsupported_receipt_upload_reason(uploaded_file, filename)
         try:
             receipt_upload_id = storage.create_receipt_upload(user_id, filename, f"uploads/{filename}")
         except Exception as exc:
@@ -1009,6 +1011,9 @@ def extract_receipt_batch(files: list[Any], storage: Storage, user_id: int) -> l
                 }
             )
             continue
+        if unsupported_reason:
+            results.append({"receipt_upload_id": receipt_upload_id, **_error_receipt_card(unsupported_reason)})
+            continue
         try:
             extracted = _extract_receipt_card_from_image(uploaded_file, filename)
         except Exception as exc:
@@ -1018,6 +1023,15 @@ def extract_receipt_batch(files: list[Any], storage: Storage, user_id: int) -> l
 
 
 _RECEIPT_CATEGORY_READY_CONFIDENCE = 0.85
+_SUPPORTED_RECEIPT_IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp", ".heic", ".heif"}
+_SUPPORTED_RECEIPT_MIME_TYPES = {
+    "application/pdf",
+    "image/heic",
+    "image/heif",
+    "image/jpeg",
+    "image/png",
+    "image/webp",
+}
 
 
 def _empty_receipt_card(behavior_note: str = "") -> dict[str, Any]:
@@ -1031,6 +1045,71 @@ def _empty_receipt_card(behavior_note: str = "") -> dict[str, Any]:
         "behavior_note": behavior_note,
         "item_tags": [],
     }
+
+
+def _error_receipt_card(behavior_note: str) -> dict[str, Any]:
+    return {
+        **_empty_receipt_card(behavior_note),
+        "status": "error",
+    }
+
+
+def _receipt_extension(filename: str) -> str:
+    return os.path.splitext(str(filename or "").strip().lower())[1]
+
+
+def _receipt_mime_type(uploaded_file: Any) -> str:
+    return str(getattr(uploaded_file, "mimetype", "") or "").strip().lower()
+
+
+def _receipt_upload_looks_supported(file_bytes: bytes, filename: str, mime_type: str) -> bool:
+    extension = _receipt_extension(filename)
+    pdf_magic = file_bytes.lstrip().startswith(b"%PDF")
+    if extension == ".pdf" or mime_type == "application/pdf" or pdf_magic:
+        return True
+    if extension in _SUPPORTED_RECEIPT_IMAGE_EXTENSIONS or mime_type in _SUPPORTED_RECEIPT_MIME_TYPES:
+        return True
+
+    try:
+        from PIL import Image
+        try:
+            from pillow_heif import register_heif_opener
+        except ModuleNotFoundError:
+            register_heif_opener = None
+
+        if register_heif_opener is not None:
+            register_heif_opener()
+
+        with Image.open(io.BytesIO(file_bytes)) as image:
+            image.verify()
+        return True
+    except Exception:
+        return False
+
+
+def _unsupported_receipt_upload_reason(uploaded_file: Any, filename: str) -> str:
+    mime_type = _receipt_mime_type(uploaded_file)
+    try:
+        file_bytes = _read_receipt_upload_bytes(uploaded_file)
+    except ValueError:
+        return "Receipt file was empty."
+
+    if _receipt_upload_looks_supported(file_bytes, filename, mime_type):
+        return ""
+    return "Unsupported receipt format. Upload JPG, PNG, WEBP, HEIC, or PDF."
+
+
+def _read_receipt_upload_bytes(uploaded_file: Any) -> bytes:
+    file_bytes = uploaded_file.read()
+    if not file_bytes:
+        raise ValueError("Receipt file was empty.")
+
+    try:
+        uploaded_file.stream.seek(0)
+    except Exception:
+        pass
+
+    return file_bytes
 
 
 def _receipt_candidate_models() -> list[str]:
@@ -1114,20 +1193,15 @@ def _normalize_receipt_card(payload: dict[str, Any]) -> dict[str, Any]:
 
 
 def _extract_receipt_card_from_image(uploaded_file: Any, filename: str) -> dict[str, Any]:
+    try:
+        image_bytes, mime_type = _normalize_receipt_upload(uploaded_file, filename)
+    except ValueError as exc:
+        return _error_receipt_card(str(exc))
+
     api_key = str(os.getenv("OPENAI_API_KEY", "")).strip()
     if not api_key:
         return _empty_receipt_card("Receipt extraction needs OPENAI_API_KEY configured.")
 
-    image_bytes = uploaded_file.read()
-    if not image_bytes:
-        return _empty_receipt_card("Receipt image file was empty.")
-
-    try:
-        uploaded_file.stream.seek(0)
-    except Exception:
-        pass
-
-    mime_type = str(getattr(uploaded_file, "mimetype", "") or "").strip() or "image/jpeg"
     image_base64 = base64.b64encode(image_bytes).decode("ascii")
     data_url = f"data:{mime_type};base64,{image_base64}"
 
@@ -1170,6 +1244,81 @@ Use the final total paid, not subtotal.
             continue
 
     return _empty_receipt_card("Could not automatically read this receipt right now.")
+
+
+def _normalize_receipt_upload(uploaded_file: Any, filename: str) -> tuple[bytes, str]:
+    extension = _receipt_extension(filename)
+    mime_type = _receipt_mime_type(uploaded_file)
+    file_bytes = _read_receipt_upload_bytes(uploaded_file)
+    pdf_candidate = extension == ".pdf" or mime_type == "application/pdf" or file_bytes.lstrip().startswith(b"%PDF")
+
+    if pdf_candidate:
+        try:
+            return _render_receipt_pdf_page_one(file_bytes)
+        except ValueError:
+            pass
+
+    try:
+        return _normalize_receipt_image(file_bytes)
+    except ValueError as exc:
+        if _receipt_upload_looks_supported(file_bytes, filename, mime_type):
+            return file_bytes, _receipt_fallback_mime_type(filename, mime_type)
+        raise ValueError("Unsupported receipt format. Upload JPG, PNG, WEBP, HEIC, or PDF.") from exc
+
+
+def _receipt_fallback_mime_type(filename: str, mime_type: str) -> str:
+    if mime_type and mime_type != "application/octet-stream":
+        return mime_type
+
+    extension = _receipt_extension(filename)
+    fallback_mime_types = {
+        ".jpg": "image/jpeg",
+        ".jpeg": "image/jpeg",
+        ".png": "image/png",
+        ".webp": "image/webp",
+        ".heic": "image/heic",
+        ".heif": "image/heif",
+    }
+    return fallback_mime_types.get(extension, "image/jpeg")
+
+
+def _normalize_receipt_image(image_bytes: bytes) -> tuple[bytes, str]:
+    from PIL import Image
+    try:
+        from pillow_heif import register_heif_opener
+    except ModuleNotFoundError:
+        register_heif_opener = None
+
+    if register_heif_opener is not None:
+        register_heif_opener()
+
+    try:
+        with Image.open(io.BytesIO(image_bytes)) as image:
+            converted = image.convert("RGB")
+            output = io.BytesIO()
+            converted.save(output, format="JPEG", quality=92)
+            return output.getvalue(), "image/jpeg"
+    except Exception as exc:
+        raise ValueError("Could not read this receipt image.") from exc
+
+
+def _render_receipt_pdf_page_one(pdf_bytes: bytes) -> tuple[bytes, str]:
+    try:
+        import fitz
+    except ModuleNotFoundError as exc:
+        raise ValueError("Could not open this PDF receipt.") from exc
+
+    try:
+        with fitz.open(stream=pdf_bytes, filetype="pdf") as document:
+            if document.page_count < 1:
+                raise ValueError("Could not render page 1 of this PDF receipt.")
+            page = document.load_page(0)
+            pixmap = page.get_pixmap(alpha=False, dpi=200)
+            return pixmap.tobytes("jpg"), "image/jpeg"
+    except ValueError:
+        raise
+    except Exception as exc:
+        raise ValueError("Could not open this PDF receipt.") from exc
 
 
 def _infer_local_receipt_category(merchant: str, receipt_text: str = "") -> dict[str, Any]:

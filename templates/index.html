@@ -696,11 +696,11 @@
 
           <div class="panel">
             <h2>Upload receipts</h2>
-            <p class="muted">Add receipt photos here to review merchant, date, amount, and category before they become part of your transaction history.</p>
+            <p class="muted">Add receipt photos/PDF here to review merchant, date, amount, and category before they become part of your transaction history.</p>
             <form id="receipt-upload-form" class="upload-form">
               <div>
-                <label for="receipt-files">Receipt images</label>
-                <input id="receipt-files" name="receipts" type="file" accept="image/*" multiple required>
+                <label for="receipt-files">Receipt photos/PDF</label>
+                <input id="receipt-files" name="receipts" type="file" accept="image/*,.pdf,application/pdf" multiple required>
               </div>
               <button type="submit">Upload receipts for review</button>
             </form>
