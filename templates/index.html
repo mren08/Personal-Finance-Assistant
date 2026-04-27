@@ -794,6 +794,9 @@
                 <li class="empty">Upload recent spending and save a monthly plan to unlock concrete actions.</li>
               {% endif %}
             </ul>
+            <div class="inline-actions">
+              <button type="button" class="secondary" id="recommended-actions-toggle" hidden>Show more</button>
+            </div>
           </div>
 
           <div class="panel">
@@ -813,6 +816,9 @@
                 <li class="empty">No recurring charges detected yet. Upload more history to improve detection.</li>
               {% endif %}
             </ul>
+            <div class="inline-actions">
+              <button type="button" class="secondary" id="subscriptions-toggle" hidden>Show more</button>
+            </div>
           </div>
 
           <div class="panel">
@@ -833,6 +839,9 @@
                 <li class="empty">Use the chat to record decisions like cutting a subscription or switching to a different workout option.</li>
               {% endif %}
             </ul>
+            <div class="inline-actions">
+              <button type="button" class="secondary" id="decisions-toggle" hidden>Show more</button>
+            </div>
           </div>
 
           <div class="panel">
@@ -905,7 +914,13 @@
       let currentProfile = {{ profile|tojson }};
       let showFullMessageHistory = false;
       const COLLAPSED_MESSAGE_COUNT = 6;
+      const SECTION_PREVIEW_COUNT = 2;
       let localReceiptErrorCounter = 0;
+      const collapsedSections = {
+        "recommended-actions-list": true,
+        "subscriptions-list": true,
+        "decisions-list": true,
+      };
 
       function money(value) {
         return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(value || 0);
@@ -1156,6 +1171,7 @@
         const list = document.getElementById("subscriptions-list");
         if (!subscriptions.length) {
           list.innerHTML = '<li class="empty">No recurring charges detected yet. Upload more history to improve detection.</li>';
+          setupPreviewList("subscriptions-list", "subscriptions-toggle");
           return;
         }
         list.innerHTML = subscriptions.map((subscription) => `
@@ -1167,12 +1183,14 @@
             <div class="small muted">${subscription.frequency} · ${subscription.category} · last seen ${subscription.last_seen}</div>
           </li>
         `).join("");
+        setupPreviewList("subscriptions-list", "subscriptions-toggle");
       }
 
       function renderDecisions(decisions) {
         const list = document.getElementById("decisions-list");
         if (!decisions.length) {
           list.innerHTML = '<li class="empty">Use the chat to record decisions like cutting a subscription or switching to a different workout option.</li>';
+          setupPreviewList("decisions-list", "decisions-toggle");
           return;
         }
         list.innerHTML = decisions.map((decision) => `
@@ -1185,6 +1203,7 @@
             <div class="small muted">${decision.created_at}</div>
           </li>
         `).join("");
+        setupPreviewList("decisions-list", "decisions-toggle");
       }
 
       function renderMonthlyPlanHistory(plans) {
@@ -1217,9 +1236,38 @@
         const list = document.getElementById("recommended-actions-list");
         if (!actions.length) {
           list.innerHTML = '<li class="empty">Upload recent spending and save a monthly plan to unlock concrete actions.</li>';
+          setupPreviewList("recommended-actions-list", "recommended-actions-toggle");
           return;
         }
         list.innerHTML = actions.map((action) => `<li>${action}</li>`).join("");
+        setupPreviewList("recommended-actions-list", "recommended-actions-toggle");
+      }
+
+      function setupPreviewList(listId, toggleId, previewCount = SECTION_PREVIEW_COUNT) {
+        const list = document.getElementById(listId);
+        const toggle = document.getElementById(toggleId);
+        if (!list || !toggle) {
+          return;
+        }
+
+        const items = Array.from(list.children).filter((item) => !item.classList.contains("empty"));
+        if (items.length <= previewCount) {
+          toggle.hidden = true;
+          toggle.textContent = "Show more";
+          items.forEach((item) => {
+            item.hidden = false;
+          });
+          return;
+        }
+
+        toggle.hidden = false;
+        const hiddenCount = items.length - previewCount;
+        const isCollapsed = collapsedSections[listId] !== false;
+        toggle.textContent = isCollapsed ? `Show more (${hiddenCount})` : "Show less";
+
+        items.forEach((item, index) => {
+          item.hidden = isCollapsed && index >= previewCount;
+        });
       }
 
       function renderReceiptReviews(receipts) {
@@ -1484,6 +1532,21 @@
         showFullMessageHistory = true;
         renderMessages((currentProfile && currentProfile.messages) || []);
         scrollMessagesToBottom();
+      });
+
+      document.getElementById("recommended-actions-toggle").addEventListener("click", () => {
+        collapsedSections["recommended-actions-list"] = !(collapsedSections["recommended-actions-list"] !== false);
+        setupPreviewList("recommended-actions-list", "recommended-actions-toggle");
+      });
+
+      document.getElementById("subscriptions-toggle").addEventListener("click", () => {
+        collapsedSections["subscriptions-list"] = !(collapsedSections["subscriptions-list"] !== false);
+        setupPreviewList("subscriptions-list", "subscriptions-toggle");
+      });
+
+      document.getElementById("decisions-toggle").addEventListener("click", () => {
+        collapsedSections["decisions-list"] = !(collapsedSections["decisions-list"] !== false);
+        setupPreviewList("decisions-list", "decisions-toggle");
       });
 
       renderProfile(currentProfile);
