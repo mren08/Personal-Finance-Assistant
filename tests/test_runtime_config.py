@@ -55,6 +55,11 @@ class DeploymentFileTests(unittest.TestCase):
 
         self.assertIn("openai", requirements.lower())
 
+    def test_python_version_is_pinned_below_render_default_breaking_version(self):
+        python_version = Path(".python-version").read_text(encoding="utf-8").strip()
+
+        self.assertEqual(python_version, "3.13.5")
+
 
 if __name__ == "__main__":
     unittest.main()
