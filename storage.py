@@ -258,6 +258,19 @@ class Storage:
                 raise ValueError("An account with that email already exists.") from exc
             return int(cursor.lastrowid)
 
+    def replace_user(self, email: str, password: str) -> int:
+        normalized_email = email.strip().lower()
+        if not normalized_email or not password:
+            raise ValueError("Email and password are required.")
+
+        with self._connect() as conn:
+            conn.execute("DELETE FROM users WHERE email = ?", (normalized_email,))
+            cursor = conn.execute(
+                "INSERT INTO users (email, password_hash) VALUES (?, ?)",
+                (normalized_email, self._hash_password(password)),
+            )
+            return int(cursor.lastrowid)
+
     def authenticate_user(self, email: str, password: str) -> int | None:
         with self._connect() as conn:
             row = conn.execute(
@@ -1190,7 +1203,7 @@ class Storage:
             selected_month=selected_month,
             monthly_income=float((financial_profile or {}).get("monthly_income") or 0),
         )
-        recurring_expenses = self._recurring_expenses(transactions)
+        recurring_expenses = self._annotate_subscription_recommendations(self._recurring_expenses(transactions))
         monthly_recurring_total = round(sum(item["monthly_equivalent"] for item in recurring_expenses), 2)
 
         monthly_summary = self.get_monthly_summary(user_id, selected_month)
@@ -1345,6 +1358,28 @@ class Storage:
             for item in transactions
         ]
         return [expense.to_dict() for expense in analyzer.analyze(modeled)]
+
+    @staticmethod
+    def _annotate_subscription_recommendations(recurring_expenses: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        if not recurring_expenses:
+            return []
+
+        annotated = [dict(item) for item in recurring_expenses]
+        eligible_categories = {"subscriptions", "entertainment", "wellness", "fitness"}
+        recommended_index = None
+        for index, item in enumerate(annotated):
+            category = str(item.get("category") or "").strip().lower()
+            if category not in eligible_categories:
+                continue
+            if recommended_index is None or float(item.get("monthly_equivalent") or 0) > float(
+                annotated[recommended_index].get("monthly_equivalent") or 0
+            ):
+                recommended_index = index
+
+        if recommended_index is None:
+            recommended_index = 0
+        annotated[recommended_index]["recommended_to_cancel"] = True
+        return annotated
 
     def _top_insights(
         self,

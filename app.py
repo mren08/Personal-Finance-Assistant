@@ -11,7 +11,7 @@ from collections import defaultdict
 from datetime import UTC, datetime
 from typing import Any
 
-from flask import Flask, current_app, jsonify, redirect, render_template, request, session, url_for
+from flask import Flask, current_app, has_request_context, jsonify, redirect, render_template, request, session, url_for
 from werkzeug.utils import secure_filename
 
 from agent_service import AgentService, FALLBACK_REPLY, build_openai_llm_client
@@ -22,6 +22,90 @@ from mailer import build_password_reset_mailer
 from recurrence import RecurringExpenseAnalyzer
 from recommender import BudgetRecommender
 from storage import Storage
+
+
+_DEMO_EMAIL = "demo@local.personal-finance-ai"
+_DEMO_PASSWORD = "demo-mode-only"
+_DEMO_SELECTED_MONTH = "2026-04"
+_DEMO_MONTHLY_INCOME = 4000.0
+_DEMO_FIXED_EXPENSES = 2200.0
+_DEMO_GOAL = "Save $2,000 for Japan trip"
+
+_DEMO_TRANSACTIONS = [
+    {"date": "2026-01-04", "description": "SWEETGREEN", "amount": 82.00, "category": "Dining", "source": "statement"},
+    {"date": "2026-01-11", "description": "JOE'S PIZZA", "amount": 67.00, "category": "Dining", "source": "statement"},
+    {"date": "2026-01-18", "description": "APERITIVO BAR", "amount": 106.00, "category": "Dining", "source": "statement"},
+    {"date": "2026-01-06", "description": "TRADER JOE'S", "amount": 118.00, "category": "Groceries", "source": "statement"},
+    {"date": "2026-01-09", "description": "SEPHORA", "amount": 95.00, "category": "Shopping", "source": "statement"},
+    {"date": "2026-01-15", "description": "UBER", "amount": 48.00, "category": "Travel", "source": "statement"},
+    {"date": "2026-01-07", "description": "NETFLIX", "amount": 15.99, "category": "Subscriptions", "source": "statement"},
+    {"date": "2026-01-08", "description": "SPOTIFY", "amount": 9.99, "category": "Subscriptions", "source": "statement"},
+    {"date": "2026-01-10", "description": "BETTER BODY GYM", "amount": 60.00, "category": "Wellness", "source": "statement"},
+    {"date": "2026-01-12", "description": "HULU", "amount": 11.99, "category": "Entertainment", "source": "statement"},
+    {"date": "2026-02-07", "description": "SWEETGREEN", "amount": 88.00, "category": "Dining", "source": "statement"},
+    {"date": "2026-02-14", "description": "SUSHI SPOT", "amount": 97.00, "category": "Dining", "source": "statement"},
+    {"date": "2026-02-21", "description": "BRUNCH CLUB", "amount": 90.00, "category": "Dining", "source": "statement"},
+    {"date": "2026-02-05", "description": "WHOLE FOODS", "amount": 126.00, "category": "Groceries", "source": "statement"},
+    {"date": "2026-02-16", "description": "AMTRAK", "amount": 36.00, "category": "Travel", "source": "statement"},
+    {"date": "2026-02-19", "description": "ALO YOGA", "amount": 105.00, "category": "Shopping", "source": "statement"},
+    {"date": "2026-02-07", "description": "NETFLIX", "amount": 15.99, "category": "Subscriptions", "source": "statement"},
+    {"date": "2026-02-08", "description": "SPOTIFY", "amount": 9.99, "category": "Subscriptions", "source": "statement"},
+    {"date": "2026-02-10", "description": "BETTER BODY GYM", "amount": 60.00, "category": "Wellness", "source": "statement"},
+    {"date": "2026-02-12", "description": "HULU", "amount": 11.99, "category": "Entertainment", "source": "statement"},
+    {"date": "2026-03-07", "description": "SWEETGREEN", "amount": 92.00, "category": "Dining", "source": "statement"},
+    {"date": "2026-03-13", "description": "DINNER WITH FRIENDS", "amount": 138.00, "category": "Dining", "source": "statement"},
+    {"date": "2026-03-19", "description": "COFFEE BAR", "amount": 34.00, "category": "Dining", "source": "statement"},
+    {"date": "2026-03-22", "description": "JOE'S PIZZA", "amount": 54.00, "category": "Dining", "source": "statement"},
+    {"date": "2026-03-05", "description": "WHOLE FOODS", "amount": 134.00, "category": "Groceries", "source": "statement"},
+    {"date": "2026-03-09", "description": "TARGET", "amount": 142.00, "category": "Shopping", "source": "statement"},
+    {"date": "2026-03-16", "description": "AMTRAK", "amount": 72.00, "category": "Travel", "source": "statement"},
+    {"date": "2026-03-07", "description": "NETFLIX", "amount": 15.99, "category": "Subscriptions", "source": "statement"},
+    {"date": "2026-03-08", "description": "SPOTIFY", "amount": 9.99, "category": "Subscriptions", "source": "statement"},
+    {"date": "2026-03-10", "description": "BETTER BODY GYM", "amount": 60.00, "category": "Wellness", "source": "statement"},
+    {"date": "2026-03-12", "description": "HULU", "amount": 11.99, "category": "Entertainment", "source": "statement"},
+    {"date": "2026-04-04", "description": "SWEETGREEN", "amount": 95.00, "category": "Dining", "source": "statement"},
+    {"date": "2026-04-10", "description": "PASTA NIGHT", "amount": 122.00, "category": "Dining", "source": "statement"},
+    {"date": "2026-04-17", "description": "COFFEE BAR", "amount": 36.00, "category": "Dining", "source": "statement"},
+    {"date": "2026-04-24", "description": "SUSHI SPOT", "amount": 100.00, "category": "Dining", "source": "statement"},
+    {"date": "2026-04-05", "description": "TRADER JOE'S", "amount": 89.00, "category": "Groceries", "source": "statement"},
+    {"date": "2026-04-19", "description": "WHOLE FOODS", "amount": 63.00, "category": "Groceries", "source": "statement"},
+    {"date": "2026-04-08", "description": "SEPHORA", "amount": 125.00, "category": "Shopping", "source": "statement"},
+    {"date": "2026-04-20", "description": "ALO YOGA", "amount": 90.00, "category": "Shopping", "source": "statement"},
+    {"date": "2026-04-09", "description": "AMTRAK", "amount": 92.00, "category": "Travel", "source": "statement"},
+    {"date": "2026-04-23", "description": "HOTEL DEPOSIT", "amount": 88.00, "category": "Travel", "source": "statement"},
+    {"date": "2026-04-06", "description": "BETTER BODY GYM", "amount": 60.00, "category": "Wellness", "source": "statement"},
+    {"date": "2026-04-14", "description": "CVS/PHARMACY", "amount": 18.00, "category": "Wellness", "source": "statement"},
+    {"date": "2026-04-12", "description": "NETFLIX", "amount": 15.99, "category": "Subscriptions", "source": "statement"},
+    {"date": "2026-04-15", "description": "SPOTIFY", "amount": 9.99, "category": "Subscriptions", "source": "statement"},
+    {"date": "2026-04-11", "description": "HULU", "amount": 11.99, "category": "Entertainment", "source": "statement"},
+    {"date": "2026-04-18", "description": "BP OCEAN AVE", "amount": 64.00, "category": "Gas", "source": "statement"},
+]
+
+_DEMO_MONTHLY_PLANS = [
+    ("2026-02", 4000.0, 2200.0, "Save $2,000 for Japan trip"),
+    ("2026-03", 4000.0, 2200.0, "Save $2,000 for Japan trip"),
+    ("2026-04", 4000.0, 2200.0, "Save $2,000 for Japan trip"),
+]
+
+_DEMO_DECISIONS = [
+    ("plan", "Japan trip plan", "Keep April spending tighter so the Japan fund keeps moving."),
+    ("subscription", "Workout swap note", "Try a lower-cost yoga studio before renewing the full gym plan."),
+]
+
+_DEMO_CHAT = [
+    (
+        "assistant",
+        "For April 2026, dining is still your clearest pressure point and your subscriptions are costing almost $100/month. If you cut one weak subscription and rein in weekends, your Japan trip goal gets a lot easier.",
+    ),
+    (
+        "user",
+        "I still want one fun dinner out each weekend.",
+    ),
+    (
+        "assistant",
+        "That is workable. Keep one planned dinner, but cap the rest of dining and do not let spontaneous coffees and lunches stack on top.",
+    ),
+]
 
 
 class _FallbackAgentClient:
@@ -830,7 +914,38 @@ def _coerce_selected_month(storage: Storage, user_id: int, month_key: str | None
 
 
 def _get_dashboard_profile(storage: Storage, user_id: int, month_key: str | None = None) -> dict[str, Any]:
-    return storage.get_dashboard_data(user_id, month_key)
+    profile = storage.get_dashboard_data(user_id, month_key)
+    profile["demo_mode"] = bool(session.get("demo_mode")) if has_request_context() else False
+    return profile
+
+
+def _seed_demo_user(storage: Storage) -> int:
+    user_id = storage.replace_user(_DEMO_EMAIL, _DEMO_PASSWORD)
+    storage.upsert_financial_profile(
+        user_id,
+        monthly_income=_DEMO_MONTHLY_INCOME,
+        fixed_expenses=_DEMO_FIXED_EXPENSES,
+        budgeting_goal=_DEMO_GOAL,
+    )
+    for month_key, income, fixed_expenses, goal in _DEMO_MONTHLY_PLANS:
+        storage.save_monthly_plan(
+            user_id,
+            month_key=month_key,
+            monthly_income=income,
+            fixed_expenses=fixed_expenses,
+            budgeting_goal=goal,
+        )
+    storage.add_transactions(user_id, list(_DEMO_TRANSACTIONS))
+    for entry_type, title, content in _DEMO_DECISIONS:
+        storage.save_user_decision(
+            user_id,
+            entry_type=entry_type,
+            title=title,
+            content=content,
+        )
+    for role, content in _DEMO_CHAT:
+        storage.add_chat_message(user_id, role, content)
+    return user_id
 
 
 def _merge_selected_month_into_transaction(transaction: dict, selected_month: str | None) -> dict:
@@ -1625,6 +1740,7 @@ def create_app() -> Flask:
             logged_in=profile is not None,
             user=user,
             profile=profile,
+            demo_mode=bool(session.get("demo_mode")),
             auth_notice=session.pop("auth_notice", None),
             auth_error=session.pop("auth_error", None),
             auth_mode="login",
@@ -1677,7 +1793,18 @@ def create_app() -> Flask:
                 401,
             )
         session["user_id"] = user_id
+        session.pop("demo_mode", None)
         session.pop("selected_month", None)
+        return redirect(url_for("index"))
+
+    @app.route("/demo", methods=["POST"])
+    def start_demo():
+        user_id = _seed_demo_user(get_storage())
+        session["user_id"] = user_id
+        session["demo_mode"] = True
+        session["selected_month"] = _DEMO_SELECTED_MONTH
+        session.pop("auth_notice", None)
+        session.pop("auth_error", None)
         return redirect(url_for("index"))
 
     @app.route("/forgot-password", methods=["POST"])
@@ -1755,6 +1882,7 @@ def create_app() -> Flask:
     @app.route("/logout", methods=["POST"])
     def logout():
         session.pop("user_id", None)
+        session.pop("demo_mode", None)
         session.pop("selected_month", None)
         return redirect(url_for("index"))
 

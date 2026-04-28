@@ -99,6 +99,15 @@ class AppRouteTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertIn(b"Build Better Budgeting Habits with an AI Assistant", response.data)
+        self.assertIn(b"What the AI does", response.data)
+        self.assertIn(b"Detects patterns, explains spending behavior, flags recurring charges, and recommends concrete next steps.", response.data)
+
+    def test_logged_out_homepage_shows_try_demo_button(self):
+        response = self.client.get("/")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(b"Try Demo (No signup required)", response.data)
+        self.assertIn(b'action="/demo"', response.data)
 
     def test_healthcheck_returns_ok(self):
         response = self.client.get("/healthz")
@@ -166,6 +175,47 @@ class AppRouteTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 401)
         self.assertIn(b"Invalid email or password.", response.data)
+
+    def test_demo_route_redirects_into_dashboard_session(self):
+        response = self.client.post("/demo", follow_redirects=False)
+
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(response.headers["Location"], "/")
+
+        with self.client.session_transaction() as session_data:
+            self.assertIsNotNone(session_data.get("user_id"))
+            self.assertTrue(session_data.get("demo_mode"))
+            self.assertEqual(session_data.get("selected_month"), "2026-04")
+
+    def test_demo_dashboard_is_prefilled_with_seeded_data(self):
+        response = self.client.post("/demo", follow_redirects=True)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(b"Demo mode", response.data)
+        self.assertIn(b"AI Insights for April", response.data)
+        self.assertIn(b"Where your money is going", response.data)
+        self.assertIn(b'value="4000.0"', response.data)
+        self.assertIn(b'value="2200.0"', response.data)
+        self.assertIn(b"Save $2,000 for Japan trip", response.data)
+        self.assertIn(b"NETFLIX", response.data)
+        self.assertIn(b"SPOTIFY", response.data)
+        self.assertIn(b"BETTER BODY GYM", response.data)
+        self.assertIn(b"Recommended to cancel", response.data)
+        self.assertIn(b"Japan trip plan", response.data)
+        self.assertIn(b"AI Chatbot", response.data)
+
+    def test_demo_logout_clears_demo_session(self):
+        self.client.post("/demo", follow_redirects=False)
+
+        response = self.client.post("/logout", follow_redirects=True)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(b"Try Demo (No signup required)", response.data)
+        self.assertNotIn(b"Demo mode", response.data)
+        with self.client.session_transaction() as session_data:
+            self.assertIsNone(session_data.get("user_id"))
+            self.assertIsNone(session_data.get("selected_month"))
+            self.assertIsNone(session_data.get("demo_mode"))
 
     def test_forgot_password_returns_neutral_notice_for_existing_email(self):
         self.client.post("/signup", data={"email": "demo@example.com", "password": "secret123"})
@@ -2096,6 +2146,12 @@ class AppRouteTests(unittest.TestCase):
         readme = Path("README.md").read_text(encoding="utf-8").lower()
 
         self.assertIn("forgot password", readme)
+
+    def test_readme_mentions_demo_mode(self):
+        readme = Path("README.md").read_text(encoding="utf-8").lower()
+
+        self.assertIn("try demo", readme)
+        self.assertIn("sanitized sample data", readme)
         self.assertIn("reset link", readme)
         self.assertIn("logging mailer", readme)
 

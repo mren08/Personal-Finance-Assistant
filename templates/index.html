@@ -423,6 +423,10 @@
       text-transform: uppercase;
       letter-spacing: 0.04em;
     }
+    .pill.demo {
+      background: #efe7db;
+      color: var(--accent-dark);
+    }
     .messages .assistant {
       border-left: 4px solid var(--accent);
     }
@@ -460,6 +464,10 @@
             <div><strong>Subscription pressure</strong><br>Surface recurring charges and overlapping services.</div>
             <div><strong>Actionable chat</strong><br>Ask budgeting questions, add missing spend, and get guidance on what to keep or cut.</div>
           </div>
+          <div style="margin-top:18px;">
+            <strong>What the AI does</strong><br>
+            Detects patterns, explains spending behavior, flags recurring charges, and recommends concrete next steps.
+          </div>
         </div>
         <div class="auth-card">
           <h2>Start tracking</h2>
@@ -480,6 +488,9 @@
               <input id="login-password" name="password" type="password" required>
             </div>
             <button class="secondary" type="submit">Sign in</button>
+          </form>
+          <form class="form-stack" method="post" action="/demo" style="margin-top:10px;">
+            <button type="submit">Try Demo (No signup required)</button>
           </form>
           <p class="small" style="margin:12px 0 8px;">
             No account?
@@ -516,9 +527,20 @@
     {% else %}
       <div class="topbar">
         <div>
-          <div class="eyebrow">Personal Finance AI Assistant</div>
+          <div class="eyebrow">
+            Personal Finance AI Assistant
+            {% if demo_mode %}
+              <span class="pill demo" style="margin-left:10px;">Demo mode</span>
+            {% endif %}
+          </div>
           <h1 style="font-size:2.5rem; max-width:none; margin-bottom:6px;">Your spending history now has memory.</h1>
-          <p class="subhead" style="margin-bottom:0;">Signed in as {{ user.email }}. Upload fresh data, then use the AI Chatbot to add missing spend, review subscriptions, and get ongoing budgeting help grounded in your spending history.</p>
+          <p class="subhead" style="margin-bottom:0;">
+            {% if demo_mode %}
+              Demo mode is active. This dashboard is preloaded with sanitized sample data so you can explore the full budgeting workflow without creating an account.
+            {% else %}
+              Signed in as {{ user.email }}. Upload fresh data, then use the AI Chatbot to add missing spend, review subscriptions, and get ongoing budgeting help grounded in your spending history.
+            {% endif %}
+          </p>
         </div>
         <div class="month-switcher">
           <div>
@@ -538,7 +560,7 @@
       <section class="dashboard">
         <div class="stack">
           <div class="panel">
-            <h2>Top 3 Insights This Month</h2>
+            <h2 id="top-insights-heading">{% if demo_mode and profile.selected_month_label %}AI Insights for {{ profile.selected_month_label.split(' ')[0] }}{% else %}Top 3 Insights This Month{% endif %}</h2>
             <ul class="insights-list" id="top-insights-list">
               {% if profile.top_insights %}
                 {% for insight in profile.top_insights %}
@@ -651,7 +673,7 @@
           </div>
 
           <div class="panel">
-            <h2>Category breakdown</h2>
+            <h2 id="category-breakdown-heading">{% if demo_mode %}Where your money is going{% else %}Category breakdown{% endif %}</h2>
             <div class="chart-panel">
               <div class="chart-wrap">
                 <svg id="category-donut-chart" viewBox="0 0 220 220" role="img" aria-label="Spending category breakdown donut chart">
@@ -807,7 +829,12 @@
                   <li>
                     <div class="row">
                       <strong>{{ subscription.merchant }}</strong>
-                      <span>${{ '%.2f'|format(subscription.monthly_equivalent) }}/mo</span>
+                      <span>
+                        {% if subscription.recommended_to_cancel %}
+                          <span class="pill" style="margin-right:8px;">Recommended to cancel</span>
+                        {% endif %}
+                        ${{ '%.2f'|format(subscription.monthly_equivalent) }}/mo
+                      </span>
                     </div>
                     <div class="small muted">{{ subscription.frequency }} · {{ subscription.category }} · last seen {{ subscription.last_seen }}</div>
                   </li>
@@ -1008,9 +1035,16 @@
           pending_receipts: pendingReceipts,
         };
         const monthLabel = profile.selected_month_label || "this month";
+        const demoMode = !!profile.demo_mode;
         document.getElementById("selected-month-label").textContent = `Viewing ${profile.selected_month_label || "No month selected"}`;
         document.getElementById("leftover-heading").textContent = `Left in ${monthLabel}`;
         document.getElementById("transactions-heading").textContent = `Recent transactions for ${profile.selected_month_label || "selected month"}`;
+        document.getElementById("top-insights-heading").textContent = demoMode && profile.selected_month_label
+          ? `AI Insights for ${profile.selected_month_label.split(" ")[0]}`
+          : "Top 3 Insights This Month";
+        document.getElementById("category-breakdown-heading").textContent = demoMode
+          ? "Where your money is going"
+          : "Category breakdown";
         document.getElementById("total-spent").textContent = money(profile.total_spent);
         document.getElementById("transaction-count").textContent = profile.transaction_count;
         document.getElementById("recurring-total").textContent = money(profile.monthly_recurring_total);
@@ -1178,7 +1212,7 @@
           <li>
             <div class="row">
               <strong>${subscription.merchant}</strong>
-              <span>${money(subscription.monthly_equivalent)}/mo</span>
+              <span>${subscription.recommended_to_cancel ? '<span class="pill" style="margin-right:8px;">Recommended to cancel</span>' : ''}${money(subscription.monthly_equivalent)}/mo</span>
             </div>
             <div class="small muted">${subscription.frequency} · ${subscription.category} · last seen ${subscription.last_seen}</div>
           </li>

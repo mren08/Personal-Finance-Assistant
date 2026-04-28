@@ -56,6 +56,18 @@ This version is built as an overspending coach rather than a generic budgeting d
 The chat is intentionally blunt. It is meant to act like an accountability partner, not a neutral assistant.
 The monthly plan form lets users save monthly income and fixed expenses so the app can compute what is actually left this month.
 
+## Demo Mode
+
+The landing page now includes `Try Demo (No signup required)`.
+
+That button opens the full dashboard with sanitized sample data already loaded:
+
+- 3 months of transactions
+- recurring subscriptions
+- a prefilled monthly plan
+- seeded chat context
+- live insights and recommended actions generated from the same dashboard logic as a real account
+
 ## Password Reset
 
 From the homepage, the `Forgot password?` link asks for an email address only.
