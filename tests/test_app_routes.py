@@ -1381,6 +1381,7 @@ class AppRouteTests(unittest.TestCase):
         self.assertIn(b"category-donut-chart", response.data)
         self.assertIn(b"month-selector", response.data)
         self.assertIn(b"transactions-category-filter", response.data)
+        self.assertIn(b"transactions-toggle", response.data)
         self.assertIn(b"User decisions & notes", response.data)
         self.assertIn(b"recommended-actions-toggle", response.data)
         self.assertIn(b"subscriptions-toggle", response.data)

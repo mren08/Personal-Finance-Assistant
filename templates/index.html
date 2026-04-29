@@ -801,6 +801,9 @@
                 <li class="empty">No transactions yet. Start with a statement upload.</li>
               {% endif %}
             </ul>
+            <div class="inline-actions">
+              <button type="button" class="secondary" id="transactions-toggle" hidden>Show more</button>
+            </div>
           </div>
         </div>
 
@@ -1185,6 +1188,7 @@
         const list = document.getElementById("transactions-list");
         if (!transactions.length) {
           list.innerHTML = '<li class="empty">No transactions yet. Start with a statement upload.</li>';
+          setupPreviewList("transactions-list", "transactions-toggle");
           return;
         }
         list.innerHTML = transactions.map((transaction) => `
@@ -1199,6 +1203,7 @@
             </div>
           </li>
         `).join("");
+        setupPreviewList("transactions-list", "transactions-toggle", 3);
       }
 
       function renderSubscriptions(subscriptions) {
