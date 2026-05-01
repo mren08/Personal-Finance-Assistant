@@ -572,6 +572,300 @@ class StorageTests(unittest.TestCase):
             self.assertEqual(profile["agent_notes"][0]["content"], "Dining usually spikes on weekends.")
             self.assertEqual(profile["monthly_summary"]["leftover_money"], 3000)
 
+    def test_storage_persists_structured_goal_fields_on_financial_profile(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            storage = Storage(f"{tmpdir}/app.db")
+            user_id = storage.create_user("michelle@example.com", "secret123")
+
+            storage.upsert_financial_profile(
+                user_id,
+                monthly_income=4200,
+                fixed_expenses=1800,
+                budgeting_goal="",
+                goal_name="Vacation fund",
+                goal_target_amount=2000,
+                goal_target_date="2026-09-01",
+                current_saved_amount=550,
+            )
+
+            profile = storage.get_financial_profile(user_id)
+
+            self.assertEqual(profile["goal_name"], "Vacation fund")
+            self.assertEqual(profile["goal_target_amount"], 2000)
+            self.assertEqual(profile["goal_target_date"], "2026-09-01")
+            self.assertEqual(profile["current_saved_amount"], 550)
+            self.assertEqual(
+                profile["budgeting_goal"],
+                "Vacation fund: $2,000 by 2026-09-01 (saved so far: $550)",
+            )
+
+    def test_storage_persists_structured_goal_fields_on_monthly_plan(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            storage = Storage(f"{tmpdir}/app.db")
+            user_id = storage.create_user("michelle@example.com", "secret123")
+
+            storage.save_monthly_plan(
+                user_id,
+                month_key="2026-04",
+                monthly_income=4200,
+                fixed_expenses=1800,
+                budgeting_goal="",
+                goal_name="Emergency fund",
+                goal_target_amount=5000,
+                goal_target_date="2026-12-31",
+                current_saved_amount=1200,
+            )
+
+            plan = storage.get_monthly_plan(user_id, "2026-04")
+            plan_history = storage.list_monthly_plans(user_id)
+
+            self.assertEqual(plan["goal_name"], "Emergency fund")
+            self.assertEqual(plan["goal_target_amount"], 5000)
+            self.assertEqual(plan["goal_target_date"], "2026-12-31")
+            self.assertEqual(plan["current_saved_amount"], 1200)
+            self.assertEqual(
+                plan["budgeting_goal"],
+                "Emergency fund: $5,000 by 2026-12-31 (saved so far: $1,200)",
+            )
+            self.assertEqual(plan_history[0]["goal_name"], "Emergency fund")
+            self.assertEqual(plan_history[0]["budgeting_goal"], plan["budgeting_goal"])
+
+    def test_storage_preserves_structured_goal_fields_on_financial_profile_update_without_new_goal_fields(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            storage = Storage(f"{tmpdir}/app.db")
+            user_id = storage.create_user("michelle@example.com", "secret123")
+
+            storage.upsert_financial_profile(
+                user_id,
+                monthly_income=4200,
+                fixed_expenses=1800,
+                budgeting_goal="Vacation fund",
+                goal_name="Vacation fund",
+                goal_target_amount=2000,
+                goal_target_date="2026-09-01",
+                current_saved_amount=550,
+            )
+            storage.upsert_financial_profile(
+                user_id,
+                monthly_income=4300,
+                fixed_expenses=1900,
+                budgeting_goal="Legacy old-style goal text",
+            )
+
+            profile = storage.get_financial_profile(user_id)
+
+            self.assertEqual(profile["monthly_income"], 4300)
+            self.assertEqual(profile["fixed_expenses"], 1900)
+            self.assertEqual(profile["goal_name"], "Vacation fund")
+            self.assertEqual(profile["goal_target_amount"], 2000)
+            self.assertEqual(profile["goal_target_date"], "2026-09-01")
+            self.assertEqual(profile["current_saved_amount"], 550)
+            self.assertEqual(profile["budgeting_goal"], "Legacy old-style goal text")
+
+    def test_storage_preserves_structured_goal_fields_on_monthly_plan_update_without_new_goal_fields(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            storage = Storage(f"{tmpdir}/app.db")
+            user_id = storage.create_user("michelle@example.com", "secret123")
+
+            storage.save_monthly_plan(
+                user_id,
+                month_key="2026-04",
+                monthly_income=4200,
+                fixed_expenses=1800,
+                budgeting_goal="Emergency fund",
+                goal_name="Emergency fund",
+                goal_target_amount=5000,
+                goal_target_date="2026-12-31",
+                current_saved_amount=1200,
+            )
+            storage.save_monthly_plan(
+                user_id,
+                month_key="2026-04",
+                monthly_income=4350,
+                fixed_expenses=1850,
+                budgeting_goal="Legacy old-style goal text",
+            )
+
+            plan = storage.get_monthly_plan(user_id, "2026-04")
+            plan_history = storage.list_monthly_plans(user_id)
+
+            self.assertEqual(plan["monthly_income"], 4350)
+            self.assertEqual(plan["fixed_expenses"], 1850)
+            self.assertEqual(plan["goal_name"], "Emergency fund")
+            self.assertEqual(plan["goal_target_amount"], 5000)
+            self.assertEqual(plan["goal_target_date"], "2026-12-31")
+            self.assertEqual(plan["current_saved_amount"], 1200)
+            self.assertEqual(plan["budgeting_goal"], "Legacy old-style goal text")
+            self.assertEqual(plan_history[0]["goal_name"], "Emergency fund")
+            self.assertEqual(plan_history[0]["budgeting_goal"], plan["budgeting_goal"])
+
+    def test_storage_preserves_meaningful_budgeting_goal_when_structured_data_is_partial(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            storage = Storage(f"{tmpdir}/app.db")
+            user_id = storage.create_user("michelle@example.com", "secret123")
+
+            storage.upsert_financial_profile(
+                user_id,
+                monthly_income=4200,
+                fixed_expenses=1800,
+                budgeting_goal="Save for spring trip",
+                goal_name="Trip",
+                current_saved_amount=300,
+            )
+
+            profile = storage.get_financial_profile(user_id)
+
+            self.assertEqual(profile["goal_name"], "Trip")
+            self.assertEqual(profile["goal_target_amount"], 0)
+            self.assertEqual(profile["goal_target_date"], "")
+            self.assertEqual(profile["current_saved_amount"], 300)
+            self.assertEqual(profile["budgeting_goal"], "Save for spring trip")
+
+    def test_storage_legacy_budgeting_goal_only_calls_replace_and_clear_text_without_touching_structured_fields(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            storage = Storage(f"{tmpdir}/app.db")
+            user_id = storage.create_user("michelle@example.com", "secret123")
+
+            storage.upsert_financial_profile(
+                user_id,
+                monthly_income=4200,
+                fixed_expenses=1800,
+                budgeting_goal="Vacation fund",
+                goal_name="Vacation fund",
+                goal_target_amount=2000,
+                goal_target_date="2026-09-01",
+                current_saved_amount=550,
+            )
+            storage.upsert_financial_profile(
+                user_id,
+                monthly_income=4300,
+                fixed_expenses=1900,
+                budgeting_goal="Holiday trip",
+            )
+            profile = storage.get_financial_profile(user_id)
+
+            self.assertEqual(profile["budgeting_goal"], "Holiday trip")
+            self.assertEqual(profile["goal_name"], "Vacation fund")
+            self.assertEqual(profile["goal_target_amount"], 2000)
+            self.assertEqual(profile["goal_target_date"], "2026-09-01")
+            self.assertEqual(profile["current_saved_amount"], 550)
+
+            storage.upsert_financial_profile(
+                user_id,
+                monthly_income=4300,
+                fixed_expenses=1900,
+                budgeting_goal="",
+            )
+            cleared_profile = storage.get_financial_profile(user_id)
+
+            self.assertEqual(cleared_profile["budgeting_goal"], "")
+            self.assertEqual(cleared_profile["goal_name"], "Vacation fund")
+            self.assertEqual(cleared_profile["goal_target_amount"], 2000)
+            self.assertEqual(cleared_profile["goal_target_date"], "2026-09-01")
+            self.assertEqual(cleared_profile["current_saved_amount"], 550)
+
+            storage.save_monthly_plan(
+                user_id,
+                month_key="2026-04",
+                monthly_income=4200,
+                fixed_expenses=1800,
+                budgeting_goal="Emergency fund",
+                goal_name="Emergency fund",
+                goal_target_amount=5000,
+                goal_target_date="2026-12-31",
+                current_saved_amount=1200,
+            )
+            storage.save_monthly_plan(
+                user_id,
+                month_key="2026-04",
+                monthly_income=4350,
+                fixed_expenses=1850,
+                budgeting_goal="Cut dining for now",
+            )
+            plan = storage.get_monthly_plan(user_id, "2026-04")
+
+            self.assertEqual(plan["budgeting_goal"], "Cut dining for now")
+            self.assertEqual(plan["goal_name"], "Emergency fund")
+            self.assertEqual(plan["goal_target_amount"], 5000)
+            self.assertEqual(plan["goal_target_date"], "2026-12-31")
+            self.assertEqual(plan["current_saved_amount"], 1200)
+
+            storage.save_monthly_plan(
+                user_id,
+                month_key="2026-04",
+                monthly_income=4350,
+                fixed_expenses=1850,
+                budgeting_goal="",
+            )
+            cleared_plan = storage.get_monthly_plan(user_id, "2026-04")
+
+            self.assertEqual(cleared_plan["budgeting_goal"], "")
+            self.assertEqual(cleared_plan["goal_name"], "Emergency fund")
+            self.assertEqual(cleared_plan["goal_target_amount"], 5000)
+            self.assertEqual(cleared_plan["goal_target_date"], "2026-12-31")
+            self.assertEqual(cleared_plan["current_saved_amount"], 1200)
+
+    def test_storage_reopens_legacy_database_and_adds_goal_columns_safely(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = f"{tmpdir}/legacy.db"
+            with sqlite3.connect(db_path) as conn:
+                conn.executescript(
+                    """
+                    CREATE TABLE users (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        email TEXT UNIQUE NOT NULL,
+                        password_hash TEXT NOT NULL
+                    );
+
+                    CREATE TABLE financial_profiles (
+                        user_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+                        monthly_income REAL NOT NULL DEFAULT 0,
+                        fixed_expenses REAL NOT NULL DEFAULT 0,
+                        budgeting_goal TEXT NOT NULL DEFAULT '',
+                        updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+                    );
+
+                    CREATE TABLE monthly_plans (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                        month_key TEXT NOT NULL,
+                        monthly_income REAL NOT NULL DEFAULT 0,
+                        fixed_expenses REAL NOT NULL DEFAULT 0,
+                        budgeting_goal TEXT NOT NULL DEFAULT '',
+                        updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                        UNIQUE(user_id, month_key)
+                    );
+
+                    INSERT INTO users (id, email, password_hash) VALUES (1, 'legacy@example.com', 'hash');
+                    INSERT INTO financial_profiles (user_id, monthly_income, fixed_expenses, budgeting_goal)
+                    VALUES (1, 4200, 1800, 'Save for trip');
+                    INSERT INTO monthly_plans (user_id, month_key, monthly_income, fixed_expenses, budgeting_goal)
+                    VALUES (1, '2026-04', 4200, 1800, 'Save for car');
+                    """
+                )
+
+            storage = Storage(db_path)
+
+            with storage._connect() as conn:
+                financial_columns = {row["name"] for row in conn.execute("PRAGMA table_info(financial_profiles)").fetchall()}
+                monthly_columns = {row["name"] for row in conn.execute("PRAGMA table_info(monthly_plans)").fetchall()}
+
+            profile = storage.get_financial_profile(1)
+            plan = storage.get_monthly_plan(1, "2026-04")
+
+            self.assertTrue({"goal_name", "goal_target_amount", "goal_target_date", "current_saved_amount"}.issubset(financial_columns))
+            self.assertTrue({"goal_name", "goal_target_amount", "goal_target_date", "current_saved_amount"}.issubset(monthly_columns))
+            self.assertEqual(profile["budgeting_goal"], "Save for trip")
+            self.assertEqual(profile["goal_name"], "")
+            self.assertEqual(profile["goal_target_amount"], 0)
+            self.assertEqual(profile["goal_target_date"], "")
+            self.assertEqual(profile["current_saved_amount"], 0)
+            self.assertEqual(plan["budgeting_goal"], "Save for car")
+            self.assertEqual(plan["goal_name"], "")
+            self.assertEqual(plan["goal_target_amount"], 0)
+            self.assertEqual(plan["goal_target_date"], "")
+            self.assertEqual(plan["current_saved_amount"], 0)
+
     def test_storage_returns_latest_month_summary_even_if_an_older_month_is_regenerated(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             storage = Storage(f"{tmpdir}/app.db")

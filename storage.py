@@ -13,6 +13,8 @@ from csv_parser import CategorizedTransaction, StatementCsvParser
 from recurrence import RecurringExpenseAnalyzer
 from recommender import BudgetRecommender
 
+_MISSING = object()
+
 
 class Storage:
     def __init__(self, db_path: str) -> None:
@@ -188,6 +190,14 @@ class Storage:
                 ON receipt_transaction_links(receipt_extraction_id)
                 """
             )
+            self._ensure_column(conn, "financial_profiles", "goal_name", "TEXT NOT NULL DEFAULT ''")
+            self._ensure_column(conn, "financial_profiles", "goal_target_amount", "REAL NOT NULL DEFAULT 0")
+            self._ensure_column(conn, "financial_profiles", "goal_target_date", "TEXT NOT NULL DEFAULT ''")
+            self._ensure_column(conn, "financial_profiles", "current_saved_amount", "REAL NOT NULL DEFAULT 0")
+            self._ensure_column(conn, "monthly_plans", "goal_name", "TEXT NOT NULL DEFAULT ''")
+            self._ensure_column(conn, "monthly_plans", "goal_target_amount", "REAL NOT NULL DEFAULT 0")
+            self._ensure_column(conn, "monthly_plans", "goal_target_date", "TEXT NOT NULL DEFAULT ''")
+            self._ensure_column(conn, "monthly_plans", "current_saved_amount", "REAL NOT NULL DEFAULT 0")
 
     @staticmethod
     def _repair_receipt_transaction_link_duplicates(conn: sqlite3.Connection) -> None:
@@ -234,6 +244,74 @@ class Storage:
                     if transaction_row and transaction_row["source"] == "receipt":
                         conn.execute("DELETE FROM transactions WHERE id = ?", (transaction_id,))
                 conn.execute("DELETE FROM receipt_transaction_links WHERE id = ?", (int(row["id"]),))
+
+    @staticmethod
+    def _ensure_column(conn: sqlite3.Connection, table: str, column: str, definition: str) -> None:
+        columns = {row["name"] for row in conn.execute(f"PRAGMA table_info({table})").fetchall()}
+        if column not in columns:
+            conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
+
+    @staticmethod
+    def _format_currency(amount: float) -> str:
+        formatted = f"${float(amount):,.2f}"
+        return formatted[:-3] if formatted.endswith(".00") else formatted.rstrip("0").rstrip(".")
+
+    @classmethod
+    def _derive_budgeting_goal(
+        cls,
+        budgeting_goal: str,
+        goal_name: str,
+        goal_target_amount: float,
+        goal_target_date: str,
+        current_saved_amount: float,
+    ) -> str:
+        goal_text = str(budgeting_goal or "").strip()
+        goal_name = str(goal_name or "").strip()
+        goal_target_date = str(goal_target_date or "").strip()
+        goal_target_amount = float(goal_target_amount or 0)
+        current_saved_amount = float(current_saved_amount or 0)
+
+        has_structured_goal = (
+            (goal_name and (goal_target_amount > 0 or goal_target_date))
+            or (goal_target_amount > 0 and goal_target_date)
+        )
+        if not has_structured_goal:
+            if goal_text:
+                return goal_text
+            if goal_name:
+                return goal_name
+            if goal_target_amount > 0 and goal_target_date:
+                return f"{cls._format_currency(goal_target_amount)} by {goal_target_date}"
+            if goal_target_amount > 0:
+                return cls._format_currency(goal_target_amount)
+            if goal_target_date:
+                return f"by {goal_target_date}"
+            if current_saved_amount > 0:
+                return f"saved so far: {cls._format_currency(current_saved_amount)}"
+            return goal_text
+
+        summary_parts: list[str] = []
+        if goal_target_amount > 0:
+            summary_parts.append(cls._format_currency(goal_target_amount))
+        if goal_target_date:
+            summary_parts.append(f"by {goal_target_date}")
+
+        prefix = f"{goal_name}: " if goal_name else ""
+        summary = f"{prefix}{' '.join(summary_parts)}".strip()
+        if current_saved_amount > 0:
+            saved_text = f"saved so far: {cls._format_currency(current_saved_amount)}"
+            summary = f"{summary} ({saved_text})" if summary else saved_text
+        return summary or goal_text
+
+    @staticmethod
+    def _goal_field_value(
+        provided_value: str | float | object,
+        existing_value: Any,
+        default_value: str | float,
+    ) -> str | float:
+        if provided_value is _MISSING:
+            return default_value if existing_value is None else existing_value
+        return provided_value
 
     @staticmethod
     def _hash_password(password: str) -> str:
@@ -909,19 +987,87 @@ class Storage:
         monthly_income: float,
         fixed_expenses: float,
         budgeting_goal: str,
+        goal_name: str | object = _MISSING,
+        goal_target_amount: float | object = _MISSING,
+        goal_target_date: str | object = _MISSING,
+        current_saved_amount: float | object = _MISSING,
     ) -> None:
+        structured_goal_provided = any(
+            value is not _MISSING
+            for value in (goal_name, goal_target_amount, goal_target_date, current_saved_amount)
+        )
         with self._connect() as conn:
+            existing = conn.execute(
+                """
+                SELECT goal_name, goal_target_amount, goal_target_date, current_saved_amount
+                FROM financial_profiles
+                WHERE user_id = ?
+                """,
+                (user_id,),
+            ).fetchone()
+            if structured_goal_provided:
+                goal_name_value = self._goal_field_value(goal_name, existing["goal_name"] if existing else None, "")
+                goal_target_amount_value = self._goal_field_value(
+                    goal_target_amount,
+                    existing["goal_target_amount"] if existing else None,
+                    0,
+                )
+                goal_target_date_value = self._goal_field_value(
+                    goal_target_date,
+                    existing["goal_target_date"] if existing else None,
+                    "",
+                )
+                current_saved_amount_value = self._goal_field_value(
+                    current_saved_amount,
+                    existing["current_saved_amount"] if existing else None,
+                    0,
+                )
+                budgeting_goal = self._derive_budgeting_goal(
+                    budgeting_goal,
+                    str(goal_name_value or ""),
+                    float(goal_target_amount_value or 0),
+                    str(goal_target_date_value or ""),
+                    float(current_saved_amount_value or 0),
+                )
+            else:
+                goal_name_value = existing["goal_name"] if existing else ""
+                goal_target_amount_value = existing["goal_target_amount"] if existing else 0
+                goal_target_date_value = existing["goal_target_date"] if existing else ""
+                current_saved_amount_value = existing["current_saved_amount"] if existing else 0
+                budgeting_goal = str(budgeting_goal or "").strip()
             conn.execute(
                 """
-                INSERT INTO financial_profiles (user_id, monthly_income, fixed_expenses, budgeting_goal)
-                VALUES (?, ?, ?, ?)
+                INSERT INTO financial_profiles (
+                    user_id,
+                    monthly_income,
+                    fixed_expenses,
+                    budgeting_goal,
+                    goal_name,
+                    goal_target_amount,
+                    goal_target_date,
+                    current_saved_amount
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(user_id) DO UPDATE SET
                     monthly_income = excluded.monthly_income,
                     fixed_expenses = excluded.fixed_expenses,
                     budgeting_goal = excluded.budgeting_goal,
+                    goal_name = excluded.goal_name,
+                    goal_target_amount = excluded.goal_target_amount,
+                    goal_target_date = excluded.goal_target_date,
+                    current_saved_amount = excluded.current_saved_amount,
                     updated_at = CURRENT_TIMESTAMP
                 """,
-                (user_id, round(float(monthly_income), 2), round(float(fixed_expenses), 2), budgeting_goal),
+                (
+                    user_id,
+                    round(float(monthly_income), 2),
+                    round(float(fixed_expenses), 2),
+                    budgeting_goal,
+                    str(goal_name_value or "").strip(),
+                    round(float(goal_target_amount_value or 0), 2),
+                    str(goal_target_date_value or "").strip(),
+                    round(float(current_saved_amount_value or 0), 2),
+                ),
             )
 
     def save_monthly_plan(
@@ -931,16 +1077,76 @@ class Storage:
         monthly_income: float,
         fixed_expenses: float,
         budgeting_goal: str,
+        goal_name: str | object = _MISSING,
+        goal_target_amount: float | object = _MISSING,
+        goal_target_date: str | object = _MISSING,
+        current_saved_amount: float | object = _MISSING,
     ) -> None:
+        structured_goal_provided = any(
+            value is not _MISSING
+            for value in (goal_name, goal_target_amount, goal_target_date, current_saved_amount)
+        )
         with self._connect() as conn:
+            existing = conn.execute(
+                """
+                SELECT goal_name, goal_target_amount, goal_target_date, current_saved_amount
+                FROM monthly_plans
+                WHERE user_id = ? AND month_key = ?
+                """,
+                (user_id, month_key),
+            ).fetchone()
+            if structured_goal_provided:
+                goal_name_value = self._goal_field_value(goal_name, existing["goal_name"] if existing else None, "")
+                goal_target_amount_value = self._goal_field_value(
+                    goal_target_amount,
+                    existing["goal_target_amount"] if existing else None,
+                    0,
+                )
+                goal_target_date_value = self._goal_field_value(
+                    goal_target_date,
+                    existing["goal_target_date"] if existing else None,
+                    "",
+                )
+                current_saved_amount_value = self._goal_field_value(
+                    current_saved_amount,
+                    existing["current_saved_amount"] if existing else None,
+                    0,
+                )
+                budgeting_goal = self._derive_budgeting_goal(
+                    budgeting_goal,
+                    str(goal_name_value or ""),
+                    float(goal_target_amount_value or 0),
+                    str(goal_target_date_value or ""),
+                    float(current_saved_amount_value or 0),
+                )
+            else:
+                goal_name_value = existing["goal_name"] if existing else ""
+                goal_target_amount_value = existing["goal_target_amount"] if existing else 0
+                goal_target_date_value = existing["goal_target_date"] if existing else ""
+                current_saved_amount_value = existing["current_saved_amount"] if existing else 0
+                budgeting_goal = str(budgeting_goal or "").strip()
             conn.execute(
                 """
-                INSERT INTO monthly_plans (user_id, month_key, monthly_income, fixed_expenses, budgeting_goal)
-                VALUES (?, ?, ?, ?, ?)
+                INSERT INTO monthly_plans (
+                    user_id,
+                    month_key,
+                    monthly_income,
+                    fixed_expenses,
+                    budgeting_goal,
+                    goal_name,
+                    goal_target_amount,
+                    goal_target_date,
+                    current_saved_amount
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(user_id, month_key) DO UPDATE SET
                     monthly_income = excluded.monthly_income,
                     fixed_expenses = excluded.fixed_expenses,
                     budgeting_goal = excluded.budgeting_goal,
+                    goal_name = excluded.goal_name,
+                    goal_target_amount = excluded.goal_target_amount,
+                    goal_target_date = excluded.goal_target_date,
+                    current_saved_amount = excluded.current_saved_amount,
                     updated_at = CURRENT_TIMESTAMP
                 """,
                 (
@@ -949,6 +1155,10 @@ class Storage:
                     round(float(monthly_income), 2),
                     round(float(fixed_expenses), 2),
                     budgeting_goal,
+                    str(goal_name_value or "").strip(),
+                    round(float(goal_target_amount_value or 0), 2),
+                    str(goal_target_date_value or "").strip(),
+                    round(float(current_saved_amount_value or 0), 2),
                 ),
             )
 
@@ -1030,7 +1240,15 @@ class Storage:
         with self._connect() as conn:
             row = conn.execute(
                 """
-                SELECT monthly_income, fixed_expenses, budgeting_goal, updated_at
+                SELECT
+                    monthly_income,
+                    fixed_expenses,
+                    budgeting_goal,
+                    goal_name,
+                    goal_target_amount,
+                    goal_target_date,
+                    current_saved_amount,
+                    updated_at
                 FROM financial_profiles
                 WHERE user_id = ?
                 """,
@@ -1042,6 +1260,10 @@ class Storage:
             "monthly_income": round(float(row["monthly_income"]), 2),
             "fixed_expenses": round(float(row["fixed_expenses"]), 2),
             "budgeting_goal": row["budgeting_goal"],
+            "goal_name": row["goal_name"],
+            "goal_target_amount": round(float(row["goal_target_amount"]), 2),
+            "goal_target_date": row["goal_target_date"],
+            "current_saved_amount": round(float(row["current_saved_amount"]), 2),
             "updated_at": row["updated_at"],
         }
 
@@ -1051,7 +1273,16 @@ class Storage:
         with self._connect() as conn:
             row = conn.execute(
                 """
-                SELECT month_key, monthly_income, fixed_expenses, budgeting_goal, updated_at
+                SELECT
+                    month_key,
+                    monthly_income,
+                    fixed_expenses,
+                    budgeting_goal,
+                    goal_name,
+                    goal_target_amount,
+                    goal_target_date,
+                    current_saved_amount,
+                    updated_at
                 FROM monthly_plans
                 WHERE user_id = ? AND month_key = ?
                 """,
@@ -1065,6 +1296,10 @@ class Storage:
             "monthly_income": round(float(row["monthly_income"]), 2),
             "fixed_expenses": round(float(row["fixed_expenses"]), 2),
             "budgeting_goal": row["budgeting_goal"],
+            "goal_name": row["goal_name"],
+            "goal_target_amount": round(float(row["goal_target_amount"]), 2),
+            "goal_target_date": row["goal_target_date"],
+            "current_saved_amount": round(float(row["current_saved_amount"]), 2),
             "updated_at": row["updated_at"],
         }
 
@@ -1072,7 +1307,16 @@ class Storage:
         with self._connect() as conn:
             rows = conn.execute(
                 """
-                SELECT month_key, monthly_income, fixed_expenses, budgeting_goal, updated_at
+                SELECT
+                    month_key,
+                    monthly_income,
+                    fixed_expenses,
+                    budgeting_goal,
+                    goal_name,
+                    goal_target_amount,
+                    goal_target_date,
+                    current_saved_amount,
+                    updated_at
                 FROM monthly_plans
                 WHERE user_id = ?
                 ORDER BY month_key DESC
@@ -1089,6 +1333,10 @@ class Storage:
                     "monthly_income": round(float(row["monthly_income"]), 2),
                     "fixed_expenses": round(float(row["fixed_expenses"]), 2),
                     "budgeting_goal": row["budgeting_goal"],
+                    "goal_name": row["goal_name"],
+                    "goal_target_amount": round(float(row["goal_target_amount"]), 2),
+                    "goal_target_date": row["goal_target_date"],
+                    "current_saved_amount": round(float(row["current_saved_amount"]), 2),
                     "updated_at": row["updated_at"],
                     "summary": (
                         f"{month_label}, monthly income of ${float(row['monthly_income']):.2f}, "
