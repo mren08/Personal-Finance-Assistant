@@ -29,7 +29,10 @@ _DEMO_PASSWORD = "demo-mode-only"
 _DEMO_SELECTED_MONTH = "2026-04"
 _DEMO_MONTHLY_INCOME = 4000.0
 _DEMO_FIXED_EXPENSES = 2200.0
-_DEMO_GOAL = "Save $2,000 for Japan trip"
+_DEMO_GOAL_NAME = "Japan trip"
+_DEMO_GOAL_TARGET_AMOUNT = 2000.0
+_DEMO_GOAL_TARGET_DATE = "2026-09-01"
+_DEMO_CURRENT_SAVED_AMOUNT = 600.0
 
 _DEMO_TRANSACTIONS = [
     {"date": "2026-01-04", "description": "SWEETGREEN", "amount": 82.00, "category": "Dining", "source": "statement"},
@@ -82,9 +85,9 @@ _DEMO_TRANSACTIONS = [
 ]
 
 _DEMO_MONTHLY_PLANS = [
-    ("2026-02", 4000.0, 2200.0, "Save $2,000 for Japan trip"),
-    ("2026-03", 4000.0, 2200.0, "Save $2,000 for Japan trip"),
-    ("2026-04", 4000.0, 2200.0, "Save $2,000 for Japan trip"),
+    ("2026-02", 4000.0, 2200.0, _DEMO_GOAL_NAME, _DEMO_GOAL_TARGET_AMOUNT, _DEMO_GOAL_TARGET_DATE, 200.0),
+    ("2026-03", 4000.0, 2200.0, _DEMO_GOAL_NAME, _DEMO_GOAL_TARGET_AMOUNT, _DEMO_GOAL_TARGET_DATE, 400.0),
+    ("2026-04", 4000.0, 2200.0, _DEMO_GOAL_NAME, _DEMO_GOAL_TARGET_AMOUNT, _DEMO_GOAL_TARGET_DATE, _DEMO_CURRENT_SAVED_AMOUNT),
 ]
 
 _DEMO_DECISIONS = [
@@ -925,15 +928,23 @@ def _seed_demo_user(storage: Storage) -> int:
         user_id,
         monthly_income=_DEMO_MONTHLY_INCOME,
         fixed_expenses=_DEMO_FIXED_EXPENSES,
-        budgeting_goal=_DEMO_GOAL,
+        budgeting_goal="",
+        goal_name=_DEMO_GOAL_NAME,
+        goal_target_amount=_DEMO_GOAL_TARGET_AMOUNT,
+        goal_target_date=_DEMO_GOAL_TARGET_DATE,
+        current_saved_amount=_DEMO_CURRENT_SAVED_AMOUNT,
     )
-    for month_key, income, fixed_expenses, goal in _DEMO_MONTHLY_PLANS:
+    for month_key, income, fixed_expenses, goal_name, goal_target_amount, goal_target_date, current_saved_amount in _DEMO_MONTHLY_PLANS:
         storage.save_monthly_plan(
             user_id,
             month_key=month_key,
             monthly_income=income,
             fixed_expenses=fixed_expenses,
-            budgeting_goal=goal,
+            budgeting_goal="",
+            goal_name=goal_name,
+            goal_target_amount=goal_target_amount,
+            goal_target_date=goal_target_date,
+            current_saved_amount=current_saved_amount,
         )
     storage.add_transactions(user_id, list(_DEMO_TRANSACTIONS))
     for entry_type, title, content in _DEMO_DECISIONS:
@@ -1600,6 +1611,10 @@ def create_app() -> Flask:
             "monthly_income": 0,
             "fixed_expenses": 0,
             "budgeting_goal": "",
+            "goal_name": "",
+            "goal_target_amount": 0,
+            "goal_target_date": "",
+            "current_saved_amount": 0,
         }
         summary = build_monthly_summary(
             monthly_income=float(financial_profile.get("monthly_income") or 0),
@@ -1660,6 +1675,10 @@ def create_app() -> Flask:
                     monthly_income=float(action["value"]),
                     fixed_expenses=float(current_profile.get("fixed_expenses") or 0),
                     budgeting_goal=str(current_profile.get("budgeting_goal") or ""),
+                    goal_name=str(current_profile.get("goal_name") or ""),
+                    goal_target_amount=float(current_profile.get("goal_target_amount") or 0),
+                    goal_target_date=str(current_profile.get("goal_target_date") or ""),
+                    current_saved_amount=float(current_profile.get("current_saved_amount") or 0),
                 )
             elif action_type == "save_fixed_expense":
                 current_profile = storage.get_financial_profile(user_id) or {}
@@ -1668,15 +1687,36 @@ def create_app() -> Flask:
                     monthly_income=float(current_profile.get("monthly_income") or 0),
                     fixed_expenses=float(action["value"]),
                     budgeting_goal=str(current_profile.get("budgeting_goal") or ""),
+                    goal_name=str(current_profile.get("goal_name") or ""),
+                    goal_target_amount=float(current_profile.get("goal_target_amount") or 0),
+                    goal_target_date=str(current_profile.get("goal_target_date") or ""),
+                    current_saved_amount=float(current_profile.get("current_saved_amount") or 0),
                 )
             elif action_type == "update_goal":
                 current_profile = storage.get_financial_profile(user_id) or {}
+                selected_month = _coerce_selected_month(storage, user_id, session.get("selected_month"))
                 storage.upsert_financial_profile(
                     user_id,
                     monthly_income=float(current_profile.get("monthly_income") or 0),
                     fixed_expenses=float(current_profile.get("fixed_expenses") or 0),
                     budgeting_goal=str(action["goal"]),
+                    goal_name="",
+                    goal_target_amount=0,
+                    goal_target_date="",
+                    current_saved_amount=0,
                 )
+                if selected_month:
+                    storage.save_monthly_plan(
+                        user_id,
+                        month_key=selected_month,
+                        monthly_income=float(current_profile.get("monthly_income") or 0),
+                        fixed_expenses=float(current_profile.get("fixed_expenses") or 0),
+                        budgeting_goal=str(action["goal"]),
+                        goal_name="",
+                        goal_target_amount=0,
+                        goal_target_date="",
+                        current_saved_amount=0,
+                    )
             elif action_type == "mark_subscription_cancel":
                 storage.clear_pending_action(user_id)
                 storage.save_subscription_decision(user_id, action["merchant"], "cancel")
@@ -1895,18 +1935,99 @@ def create_app() -> Flask:
 
         payload = request.get_json(silent=True) or {}
         requested_month = payload.get("month") or session.get("selected_month") or datetime.now(UTC).strftime("%Y-%m")
-        get_storage().upsert_financial_profile(
-            user_id,
-            monthly_income=float(payload.get("monthly_income", 0)),
-            fixed_expenses=float(payload.get("fixed_expenses", 0)),
-            budgeting_goal=str(payload.get("budgeting_goal", "")).strip(),
+        storage = get_storage()
+        current_profile = storage.get_financial_profile(user_id) or {}
+        effective_profile = (_get_dashboard_profile(storage, user_id, requested_month).get("financial_profile") or current_profile)
+        structured_goal_intent = str(payload.get("structured_goal_intent") or "").strip()
+
+        goal_name_provided = "goal_name" in payload
+        goal_target_amount_provided = "goal_target_amount" in payload
+        goal_target_date_provided = "goal_target_date" in payload
+        current_saved_amount_provided = "current_saved_amount" in payload
+        structured_goal_provided = any(
+            (
+                goal_name_provided,
+                goal_target_amount_provided,
+                goal_target_date_provided,
+                current_saved_amount_provided,
+            )
         )
-        get_storage().save_monthly_plan(
+
+        goal_name = str(payload.get("goal_name", "")).strip() if goal_name_provided else None
+        goal_target_amount = (
+            float(payload.get("goal_target_amount", 0) or 0) if goal_target_amount_provided else None
+        )
+        goal_target_date = str(payload.get("goal_target_date", "")).strip() if goal_target_date_provided else None
+        current_saved_amount = (
+            float(payload.get("current_saved_amount", 0) or 0) if current_saved_amount_provided else None
+        )
+
+        structured_goal_has_value = any(
+            (
+                bool(goal_name),
+                bool(goal_target_amount and goal_target_amount > 0),
+                bool(goal_target_date),
+                bool(current_saved_amount and current_saved_amount > 0),
+            )
+        )
+        budgeting_goal = (
+            str(payload.get("budgeting_goal", "")).strip()
+            if "budgeting_goal" in payload
+            else str(current_profile.get("budgeting_goal") or "")
+        )
+        global_profile_update_kwargs: dict[str, Any] = {
+            "monthly_income": float(payload.get("monthly_income", 0)),
+            "fixed_expenses": float(payload.get("fixed_expenses", 0)),
+            "budgeting_goal": budgeting_goal,
+        }
+        monthly_plan_update_kwargs: dict[str, Any] = {
+            "monthly_income": float(payload.get("monthly_income", 0)),
+            "fixed_expenses": float(payload.get("fixed_expenses", 0)),
+            "budgeting_goal": budgeting_goal,
+        }
+
+        if structured_goal_intent == "unchanged":
+            structured_goal_provided = False
+            goal_name_provided = False
+            goal_target_amount_provided = False
+            goal_target_date_provided = False
+            current_saved_amount_provided = False
+            budgeting_goal = str(current_profile.get("budgeting_goal") or "")
+            global_profile_update_kwargs["budgeting_goal"] = budgeting_goal
+            monthly_plan_update_kwargs["budgeting_goal"] = str(effective_profile.get("budgeting_goal") or "")
+            monthly_plan_update_kwargs["goal_name"] = str(effective_profile.get("goal_name") or "")
+            monthly_plan_update_kwargs["goal_target_amount"] = float(effective_profile.get("goal_target_amount") or 0)
+            monthly_plan_update_kwargs["goal_target_date"] = str(effective_profile.get("goal_target_date") or "")
+            monthly_plan_update_kwargs["current_saved_amount"] = float(effective_profile.get("current_saved_amount") or 0)
+        elif structured_goal_provided and "budgeting_goal" not in payload:
+            if structured_goal_has_value:
+                budgeting_goal = str(current_profile.get("budgeting_goal") or "")
+            else:
+                budgeting_goal = ""
+            global_profile_update_kwargs["budgeting_goal"] = budgeting_goal
+            monthly_plan_update_kwargs["budgeting_goal"] = budgeting_goal
+
+        if goal_name_provided:
+            global_profile_update_kwargs["goal_name"] = goal_name
+            monthly_plan_update_kwargs["goal_name"] = goal_name
+        if goal_target_amount_provided:
+            global_profile_update_kwargs["goal_target_amount"] = goal_target_amount
+            monthly_plan_update_kwargs["goal_target_amount"] = goal_target_amount
+        if goal_target_date_provided:
+            global_profile_update_kwargs["goal_target_date"] = goal_target_date
+            monthly_plan_update_kwargs["goal_target_date"] = goal_target_date
+        if current_saved_amount_provided:
+            global_profile_update_kwargs["current_saved_amount"] = current_saved_amount
+            monthly_plan_update_kwargs["current_saved_amount"] = current_saved_amount
+
+        storage.upsert_financial_profile(
+            user_id,
+            **global_profile_update_kwargs,
+        )
+        storage.save_monthly_plan(
             user_id,
             month_key=requested_month,
-            monthly_income=float(payload.get("monthly_income", 0)),
-            fixed_expenses=float(payload.get("fixed_expenses", 0)),
-            budgeting_goal=str(payload.get("budgeting_goal", "")).strip(),
+            **monthly_plan_update_kwargs,
         )
         profile = refresh_user_summary(user_id, requested_month)
         session["selected_month"] = profile.get("selected_month")

@@ -196,7 +196,16 @@ class AppRouteTests(unittest.TestCase):
         self.assertIn(b"Where your money is going", response.data)
         self.assertIn(b'value="4000.0"', response.data)
         self.assertIn(b'value="2200.0"', response.data)
-        self.assertIn(b"Save $2,000 for Japan trip", response.data)
+        self.assertIn(b'id="goal-name"', response.data)
+        self.assertIn(b'value="Japan trip"', response.data)
+        self.assertIn(b'id="goal-target-amount"', response.data)
+        self.assertIn(b'value="2000.0"', response.data)
+        self.assertIn(b'id="goal-target-date"', response.data)
+        self.assertIn(b'value="2026-09-01"', response.data)
+        self.assertIn(b'id="current-saved-amount"', response.data)
+        self.assertIn(b'value="600.0"', response.data)
+        self.assertIn(b"Your Spending Profile", response.data)
+        self.assertIn(b"Ways to Improve Your Outcome", response.data)
         self.assertIn(b"NETFLIX", response.data)
         self.assertIn(b"SPOTIFY", response.data)
         self.assertIn(b"BETTER BODY GYM", response.data)
@@ -761,7 +770,7 @@ class AppRouteTests(unittest.TestCase):
         self.assertEqual(payload["action"]["type"], "confirm_transaction_match")
         self.assertEqual(payload["profile"]["transaction_count"], 1)
 
-    def test_profile_update_route_saves_income_and_fixed_expenses(self):
+    def test_profile_update_route_saves_income_fixed_expenses_and_structured_goal_fields(self):
         self._signup_and_login()
 
         response = self.client.post(
@@ -769,7 +778,10 @@ class AppRouteTests(unittest.TestCase):
             json={
                 "monthly_income": 4200,
                 "fixed_expenses": 1800,
-                "budgeting_goal": "Spend less on dining",
+                "goal_name": "Emergency fund",
+                "goal_target_amount": 1500,
+                "goal_target_date": "2026-12-01",
+                "current_saved_amount": 300,
             },
         )
 
@@ -777,6 +789,11 @@ class AppRouteTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(payload["profile"]["financial_profile"]["monthly_income"], 4200)
         self.assertEqual(payload["profile"]["financial_profile"]["fixed_expenses"], 1800)
+        self.assertEqual(payload["profile"]["financial_profile"]["goal_name"], "Emergency fund")
+        self.assertEqual(payload["profile"]["financial_profile"]["goal_target_amount"], 1500)
+        self.assertEqual(payload["profile"]["financial_profile"]["goal_target_date"], "2026-12-01")
+        self.assertEqual(payload["profile"]["financial_profile"]["current_saved_amount"], 300)
+        self.assertEqual(payload["profile"]["goal_summary"], "Emergency fund | $1,500 | by 2026-12-01 | saved so far: $300")
         self.assertEqual(payload["profile"]["monthly_summary"]["available_before_fixed"], 4200)
         self.assertEqual(payload["profile"]["monthly_summary"]["leftover_money"], 2400)
         self.assertEqual(
@@ -784,7 +801,7 @@ class AppRouteTests(unittest.TestCase):
             f"{datetime.now(UTC).strftime('%B %Y')} focus",
         )
 
-    def test_monthly_plan_saves_month_scoped_entry_and_can_be_edited(self):
+    def test_monthly_plan_saves_month_scoped_entry_and_can_be_edited_with_structured_goal_fields(self):
         self._signup_and_login()
         self.client.post(
             "/api/upload-statement",
@@ -798,7 +815,10 @@ class AppRouteTests(unittest.TestCase):
                 "month": "2026-04",
                 "monthly_income": 3000,
                 "fixed_expenses": 500,
-                "budgeting_goal": "Save 500 for a trip",
+                "goal_name": "Japan trip",
+                "goal_target_amount": 2000,
+                "goal_target_date": "2026-09-01",
+                "current_saved_amount": 500,
             },
         )
         april_payload = april_response.get_json()
@@ -806,9 +826,12 @@ class AppRouteTests(unittest.TestCase):
         self.assertEqual(april_response.status_code, 200)
         self.assertEqual(april_payload["profile"]["financial_profile"]["monthly_income"], 3000)
         self.assertEqual(april_payload["profile"]["financial_profile"]["fixed_expenses"], 500)
-        self.assertEqual(april_payload["profile"]["financial_profile"]["budgeting_goal"], "Save 500 for a trip")
+        self.assertEqual(april_payload["profile"]["financial_profile"]["goal_name"], "Japan trip")
+        self.assertEqual(april_payload["profile"]["financial_profile"]["goal_target_amount"], 2000)
+        self.assertEqual(april_payload["profile"]["financial_profile"]["goal_target_date"], "2026-09-01")
+        self.assertEqual(april_payload["profile"]["financial_profile"]["current_saved_amount"], 500)
         self.assertIn(
-            "April 2026, monthly income of $3000.00, fixed expenses of $500.00, goal is to Save 500 for a trip",
+            "April 2026, monthly income of $3000.00, fixed expenses of $500.00, goal is to Japan trip: $2,000 by 2026-09-01 (saved so far: $500)",
             [item["summary"] for item in april_payload["profile"]["monthly_plan_history"]],
         )
 
@@ -818,13 +841,17 @@ class AppRouteTests(unittest.TestCase):
                 "month": "2026-03",
                 "monthly_income": 2800,
                 "fixed_expenses": 650,
-                "budgeting_goal": "Pay down dining overspend",
+                "goal_name": "Dining reset",
+                "goal_target_amount": 400,
+                "goal_target_date": "2026-05-01",
+                "current_saved_amount": 50,
             },
         )
         march_payload = march_response.get_json()
         self.assertEqual(march_response.status_code, 200)
         self.assertEqual(march_payload["profile"]["selected_month"], "2026-03")
         self.assertEqual(march_payload["profile"]["financial_profile"]["monthly_income"], 2800)
+        self.assertEqual(march_payload["profile"]["financial_profile"]["goal_name"], "Dining reset")
         self.assertEqual(len(march_payload["profile"]["monthly_plan_history"]), 2)
 
         edited_response = self.client.post(
@@ -833,16 +860,351 @@ class AppRouteTests(unittest.TestCase):
                 "month": "2026-04",
                 "monthly_income": 3200,
                 "fixed_expenses": 550,
-                "budgeting_goal": "Save 700 for a trip",
+                "goal_name": "Japan trip",
+                "goal_target_amount": 2200,
+                "goal_target_date": "2026-09-01",
+                "current_saved_amount": 700,
             },
         )
         edited_payload = edited_response.get_json()
         self.assertEqual(edited_response.status_code, 200)
         self.assertEqual(edited_payload["profile"]["financial_profile"]["monthly_income"], 3200)
+        self.assertEqual(edited_payload["profile"]["financial_profile"]["goal_target_amount"], 2200)
         april_entry = next(
             item for item in edited_payload["profile"]["monthly_plan_history"] if item["month_key"] == "2026-04"
         )
         self.assertIn("April 2026, monthly income of $3200.00, fixed expenses of $550.00", april_entry["summary"])
+        self.assertIn("Japan trip: $2,200 by 2026-09-01 (saved so far: $700)", april_entry["summary"])
+
+    def test_logged_in_dashboard_renders_structured_goal_fields_and_new_dashboard_sections(self):
+        self._signup_and_login()
+        self.client.post(
+            "/api/upload-statement",
+            data={"statement": (io.BytesIO(INSIGHTS_CSV.encode("utf-8")), "statement.csv")},
+            content_type="multipart/form-data",
+        )
+        self.client.post(
+            "/api/profile",
+            json={
+                "month": "2026-04",
+                "monthly_income": 1000,
+                "fixed_expenses": 300,
+                "goal_name": "Travel fund",
+                "goal_target_amount": 1000,
+                "goal_target_date": "2026-08-01",
+                "current_saved_amount": 250,
+            },
+        )
+
+        response = self.client.get("/?month=2026-04")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(b'Savings goal', response.data)
+        self.assertIn(b'id="goal-name"', response.data)
+        self.assertIn(b'id="goal-target-amount"', response.data)
+        self.assertIn(b'id="goal-target-date"', response.data)
+        self.assertIn(b'id="current-saved-amount"', response.data)
+        self.assertIn(b'value="Travel fund"', response.data)
+        self.assertIn(b'value="1000.0"', response.data)
+        self.assertIn(b'value="2026-08-01"', response.data)
+        self.assertIn(b'value="250.0"', response.data)
+        self.assertIn(b"Your Spending Profile", response.data)
+        self.assertIn(b"Based on your uploaded transactions, budget caps, recurring subscriptions, and savings goal.", response.data)
+        self.assertIn(b"Ways to Improve Your Outcome", response.data)
+        self.assertIn(b"Stay on Current Path", response.data)
+        self.assertIn(b"Moderate Adjustment", response.data)
+        self.assertIn(b"Aggressive Savings", response.data)
+        self.assertIn(b'data-scenario-key="stay_on_current_path"', response.data)
+        self.assertIn(b'data-chat-prompt="Help me review my current path using my current spending data."', response.data)
+        self.assertIn(b'data-scenario-key="moderate_adjustment"', response.data)
+        self.assertIn(b'data-scenario-key="aggressive_savings"', response.data)
+        self.assertIn(b'let structuredGoalTouched = false;', response.data)
+        self.assertIn(b'structured_goal_intent: structuredGoalTouched ? "set_or_clear" : "unchanged"', response.data)
+        self.assertIn(b'body: JSON.stringify({ message: input.value, month: document.getElementById("month-selector").value, scenario_key: chatForm.dataset.scenarioKey || "", scenario_prompt: chatForm.dataset.scenarioPrompt || "" })', response.data)
+        self.assertIn(b'document.getElementById("scenario-analysis").addEventListener("click"', response.data)
+
+    def test_profile_update_preserves_legacy_budgeting_goal_when_structured_goal_fields_are_omitted(self):
+        self._signup_and_login()
+
+        legacy_response = self.client.post(
+            "/api/profile",
+            json={
+                "month": "2026-04",
+                "monthly_income": 3200,
+                "fixed_expenses": 1400,
+                "budgeting_goal": "Pay down dining overspend",
+            },
+        )
+        legacy_payload = legacy_response.get_json()
+        self.assertEqual(legacy_response.status_code, 200)
+        self.assertEqual(
+            legacy_payload["profile"]["financial_profile"]["budgeting_goal"],
+            "Pay down dining overspend",
+        )
+
+        refreshed_response = self.client.post(
+            "/api/profile",
+            json={
+                "month": "2026-04",
+                "monthly_income": 3400,
+                "fixed_expenses": 1500,
+            },
+        )
+        refreshed_payload = refreshed_response.get_json()
+
+        self.assertEqual(refreshed_response.status_code, 200)
+        self.assertEqual(
+            refreshed_payload["profile"]["financial_profile"]["budgeting_goal"],
+            "Pay down dining overspend",
+        )
+        april_entry = next(
+            item for item in refreshed_payload["profile"]["monthly_plan_history"] if item["month_key"] == "2026-04"
+        )
+        self.assertIn("goal is to Pay down dining overspend", april_entry["summary"])
+
+    def test_profile_update_preserves_legacy_budgeting_goal_for_browser_shaped_unchanged_structured_payload(self):
+        self._signup_and_login()
+
+        legacy_response = self.client.post(
+            "/api/profile",
+            json={
+                "month": "2026-04",
+                "monthly_income": 3200,
+                "fixed_expenses": 1400,
+                "budgeting_goal": "Pay down dining overspend",
+            },
+        )
+        legacy_payload = legacy_response.get_json()
+        self.assertEqual(legacy_response.status_code, 200)
+        self.assertEqual(
+            legacy_payload["profile"]["financial_profile"]["budgeting_goal"],
+            "Pay down dining overspend",
+        )
+
+        browser_shaped_response = self.client.post(
+            "/api/profile",
+            json={
+                "month": "2026-04",
+                "monthly_income": 3400,
+                "fixed_expenses": 1500,
+                "goal_name": "",
+                "goal_target_amount": 0,
+                "goal_target_date": "",
+                "current_saved_amount": 0,
+                "structured_goal_intent": "unchanged",
+            },
+        )
+        browser_shaped_payload = browser_shaped_response.get_json()
+
+        self.assertEqual(browser_shaped_response.status_code, 200)
+        self.assertEqual(
+            browser_shaped_payload["profile"]["financial_profile"]["budgeting_goal"],
+            "Pay down dining overspend",
+        )
+        april_entry = next(
+            item for item in browser_shaped_payload["profile"]["monthly_plan_history"] if item["month_key"] == "2026-04"
+        )
+        self.assertIn("goal is to Pay down dining overspend", april_entry["summary"])
+
+    def test_profile_update_preserves_inherited_structured_goal_for_browser_shaped_unchanged_payload(self):
+        self._signup_and_login()
+        self.client.post(
+            "/api/upload-statement",
+            data={"statement": (io.BytesIO(MULTI_MONTH_CSV.encode("utf-8")), "statement.csv")},
+            content_type="multipart/form-data",
+        )
+
+        global_goal_response = self.client.post(
+            "/api/profile",
+            json={
+                "month": "2026-04",
+                "monthly_income": 3200,
+                "fixed_expenses": 1400,
+                "goal_name": "Japan trip",
+                "goal_target_amount": 2000,
+                "goal_target_date": "2026-09-01",
+                "current_saved_amount": 300,
+            },
+        )
+        global_goal_payload = global_goal_response.get_json()
+        self.assertEqual(global_goal_response.status_code, 200)
+        self.assertEqual(global_goal_payload["profile"]["financial_profile"]["goal_name"], "Japan trip")
+
+        inherited_month_response = self.client.post(
+            "/api/profile",
+            json={
+                "month": "2026-03",
+                "monthly_income": 3300,
+                "fixed_expenses": 1450,
+                "goal_name": "",
+                "goal_target_amount": 0,
+                "goal_target_date": "",
+                "current_saved_amount": 0,
+                "structured_goal_intent": "unchanged",
+            },
+        )
+        inherited_month_payload = inherited_month_response.get_json()
+
+        self.assertEqual(inherited_month_response.status_code, 200)
+        self.assertEqual(inherited_month_payload["profile"]["selected_month"], "2026-03")
+        self.assertEqual(inherited_month_payload["profile"]["financial_profile"]["goal_name"], "Japan trip")
+        self.assertEqual(inherited_month_payload["profile"]["financial_profile"]["goal_target_amount"], 2000)
+        self.assertEqual(inherited_month_payload["profile"]["financial_profile"]["goal_target_date"], "2026-09-01")
+        self.assertEqual(inherited_month_payload["profile"]["financial_profile"]["current_saved_amount"], 300)
+        march_entry = next(
+            item for item in inherited_month_payload["profile"]["monthly_plan_history"] if item["month_key"] == "2026-03"
+        )
+        self.assertIn("goal is to Japan trip: $2,000 by 2026-09-01 (saved so far: $300)", march_entry["summary"])
+
+    def test_profile_update_preserves_month_specific_structured_goal_for_browser_shaped_unchanged_payload(self):
+        self._signup_and_login()
+        self.client.post(
+            "/api/upload-statement",
+            data={"statement": (io.BytesIO(MULTI_MONTH_CSV.encode("utf-8")), "statement.csv")},
+            content_type="multipart/form-data",
+        )
+
+        self.client.post(
+            "/api/profile",
+            json={
+                "month": "2026-04",
+                "monthly_income": 3200,
+                "fixed_expenses": 1400,
+                "goal_name": "Japan trip",
+                "goal_target_amount": 2000,
+                "goal_target_date": "2026-09-01",
+                "current_saved_amount": 300,
+            },
+        )
+        month_specific_response = self.client.post(
+            "/api/profile",
+            json={
+                "month": "2026-03",
+                "monthly_income": 3100,
+                "fixed_expenses": 1350,
+                "goal_name": "Laptop fund",
+                "goal_target_amount": 1200,
+                "goal_target_date": "2026-06-01",
+                "current_saved_amount": 450,
+            },
+        )
+        month_specific_payload = month_specific_response.get_json()
+        self.assertEqual(month_specific_response.status_code, 200)
+        self.assertEqual(month_specific_payload["profile"]["financial_profile"]["goal_name"], "Laptop fund")
+
+        preserved_response = self.client.post(
+            "/api/profile",
+            json={
+                "month": "2026-03",
+                "monthly_income": 3150,
+                "fixed_expenses": 1375,
+                "goal_name": "",
+                "goal_target_amount": 0,
+                "goal_target_date": "",
+                "current_saved_amount": 0,
+                "structured_goal_intent": "unchanged",
+            },
+        )
+        preserved_payload = preserved_response.get_json()
+
+        self.assertEqual(preserved_response.status_code, 200)
+        self.assertEqual(preserved_payload["profile"]["selected_month"], "2026-03")
+        self.assertEqual(preserved_payload["profile"]["financial_profile"]["goal_name"], "Laptop fund")
+        self.assertEqual(preserved_payload["profile"]["financial_profile"]["goal_target_amount"], 1200)
+        self.assertEqual(preserved_payload["profile"]["financial_profile"]["goal_target_date"], "2026-06-01")
+        self.assertEqual(preserved_payload["profile"]["financial_profile"]["current_saved_amount"], 450)
+        march_entry = next(
+            item for item in preserved_payload["profile"]["monthly_plan_history"] if item["month_key"] == "2026-03"
+        )
+        self.assertIn("goal is to Laptop fund: $1,200 by 2026-06-01 (saved so far: $450)", march_entry["summary"])
+
+    def test_profile_update_explicitly_clears_goal_when_structured_fields_are_submitted_empty(self):
+        self._signup_and_login()
+
+        seeded_response = self.client.post(
+            "/api/profile",
+            json={
+                "month": "2026-04",
+                "monthly_income": 3200,
+                "fixed_expenses": 1400,
+                "budgeting_goal": "Pay down dining overspend",
+            },
+        )
+        seeded_payload = seeded_response.get_json()
+        self.assertEqual(seeded_response.status_code, 200)
+        self.assertEqual(
+            seeded_payload["profile"]["financial_profile"]["budgeting_goal"],
+            "Pay down dining overspend",
+        )
+
+        cleared_response = self.client.post(
+            "/api/profile",
+            json={
+                "month": "2026-04",
+                "monthly_income": 3200,
+                "fixed_expenses": 1400,
+                "goal_name": "",
+                "goal_target_amount": 0,
+                "goal_target_date": "",
+                "current_saved_amount": 0,
+            },
+        )
+        cleared_payload = cleared_response.get_json()
+
+        self.assertEqual(cleared_response.status_code, 200)
+        self.assertEqual(cleared_payload["profile"]["financial_profile"]["budgeting_goal"], "")
+        self.assertEqual(cleared_payload["profile"]["goal_summary"], "")
+        self.assertEqual(cleared_payload["profile"]["financial_profile"]["goal_name"], "")
+        self.assertEqual(cleared_payload["profile"]["financial_profile"]["goal_target_amount"], 0)
+        self.assertEqual(cleared_payload["profile"]["financial_profile"]["goal_target_date"], "")
+        self.assertEqual(cleared_payload["profile"]["financial_profile"]["current_saved_amount"], 0)
+        april_entry = next(
+            item for item in cleared_payload["profile"]["monthly_plan_history"] if item["month_key"] == "2026-04"
+        )
+        self.assertIn("goal is to not set", april_entry["summary"])
+
+    def test_chat_update_goal_clears_structured_goal_fields_and_applies_text_goal(self):
+        self._signup_and_login()
+        self.client.post(
+            "/api/profile",
+            json={
+                "month": "2026-04",
+                "monthly_income": 3000,
+                "fixed_expenses": 800,
+                "goal_name": "Japan trip",
+                "goal_target_amount": 2000,
+                "goal_target_date": "2026-09-01",
+                "current_saved_amount": 400,
+            },
+        )
+
+        with patch("app.build_agent_service") as build_agent_service:
+            build_agent_service.return_value.run_chat_turn.return_value = {
+                "reply": "I updated your goal to focus on cutting dining this month.",
+                "actions": [
+                    {
+                        "type": "update_goal",
+                        "goal": "Spend less on dining this month",
+                    }
+                ],
+            }
+
+            response = self.client.post(
+                "/api/chat",
+                json={"message": "Update my goal to spend less on dining this month."},
+            )
+
+        payload = response.get_json()
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            payload["profile"]["financial_profile"]["budgeting_goal"],
+            "Spend less on dining this month",
+        )
+        self.assertEqual(payload["profile"]["financial_profile"]["goal_name"], "")
+        self.assertEqual(payload["profile"]["financial_profile"]["goal_target_amount"], 0)
+        self.assertEqual(payload["profile"]["financial_profile"]["goal_target_date"], "")
+        self.assertEqual(payload["profile"]["financial_profile"]["current_saved_amount"], 0)
 
     def test_chat_route_persists_agent_note_from_llm_result(self):
         self._signup_and_login()

@@ -342,6 +342,51 @@
       font-size: 1.7rem;
       font-weight: 700;
     }
+    .subsection-label {
+      font-size: 0.82rem;
+      font-weight: 800;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: var(--accent);
+      margin-bottom: 4px;
+    }
+    .profile-card {
+      border: 1px solid #efe4d3;
+      border-radius: 16px;
+      background: #fff8f1;
+      padding: 16px;
+    }
+    .profile-card ul {
+      margin: 12px 0 0;
+      padding-left: 18px;
+    }
+    .profile-card li + li {
+      margin-top: 8px;
+    }
+    .scenario-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 12px;
+    }
+    .scenario-card {
+      border: 1px solid #efe4d3;
+      border-radius: 16px;
+      background: #fff8f1;
+      padding: 16px;
+      display: grid;
+      gap: 12px;
+    }
+    .scenario-card .impact {
+      font-size: 1.5rem;
+      font-weight: 700;
+    }
+    .scenario-card ul {
+      margin: 0;
+      padding-left: 18px;
+    }
+    .scenario-card button {
+      margin-top: auto;
+    }
     .list {
       list-style: none;
       margin: 0;
@@ -445,7 +490,7 @@
     .good { color: var(--good); }
     .bad { color: var(--bad); }
     @media (max-width: 980px) {
-      .hero, .dashboard, .metric-grid, .hero-points, .summary-grid, .profile-form, .chart-panel {
+      .hero, .dashboard, .metric-grid, .hero-points, .summary-grid, .profile-form, .chart-panel, .scenario-grid {
         grid-template-columns: 1fr;
       }
     }
@@ -596,6 +641,24 @@
           </div>
 
           <div class="panel">
+            <h2>Your Spending Profile</h2>
+            <div id="spending-profile-card" class="profile-card">
+              {% if profile.spending_profile %}
+                <strong id="spending-profile-name">{{ profile.spending_profile.name }}</strong>
+                <p id="spending-profile-description" class="muted" style="margin:10px 0 0;">{{ profile.spending_profile.description }}</p>
+                <ul id="spending-profile-reasons">
+                  {% for reason in profile.spending_profile.reasons %}
+                    <li>{{ reason }}</li>
+                  {% endfor %}
+                </ul>
+                <p id="spending-profile-why-this" class="small muted" style="margin:12px 0 0;">{{ profile.spending_profile.why_this }}</p>
+              {% else %}
+                <div class="empty">Upload recent spending and save a plan to infer your spending profile.</div>
+              {% endif %}
+            </div>
+          </div>
+
+          <div class="panel">
             <h2>Monthly plan</h2>
             <form id="profile-form" class="profile-form">
               <div>
@@ -617,12 +680,43 @@
                 >
               </div>
               <div class="full">
-                <label for="budgeting-goal">Budgeting goal</label>
+                <div class="subsection-label">Savings goal</div>
+              </div>
+              <div>
+                <label for="goal-name">Goal name</label>
                 <input
-                  id="budgeting-goal"
+                  id="goal-name"
                   type="text"
-                  value="{{ profile.financial_profile.budgeting_goal if profile.financial_profile else '' }}"
-                  placeholder="Example: Spend less on dining"
+                  value="{{ profile.financial_profile.goal_name if profile.financial_profile else '' }}"
+                  placeholder="Japan trip"
+                >
+              </div>
+              <div>
+                <label for="goal-target-amount">Target amount</label>
+                <input
+                  id="goal-target-amount"
+                  type="number"
+                  step="0.01"
+                  min="0"
+                  value="{{ profile.financial_profile.goal_target_amount if profile.financial_profile else 0 }}"
+                >
+              </div>
+              <div>
+                <label for="goal-target-date">Target date</label>
+                <input
+                  id="goal-target-date"
+                  type="date"
+                  value="{{ profile.financial_profile.goal_target_date if profile.financial_profile else '' }}"
+                >
+              </div>
+              <div>
+                <label for="current-saved-amount">Current saved amount</label>
+                <input
+                  id="current-saved-amount"
+                  type="number"
+                  step="0.01"
+                  min="0"
+                  value="{{ profile.financial_profile.current_saved_amount if profile.financial_profile else 0 }}"
                 >
               </div>
               <div class="full">
@@ -700,6 +794,33 @@
                   <li class="empty">Upload a statement to see how your spending splits by category.</li>
                 {% endif %}
               </ul>
+            </div>
+          </div>
+
+          <div class="panel">
+            <h2>Ways to Improve Your Outcome</h2>
+            <div id="scenario-analysis" class="scenario-grid">
+              {% if profile.scenario_analysis %}
+                {% for scenario in profile.scenario_analysis %}
+                  <article class="scenario-card">
+                    <div>
+                      <strong>{{ scenario.title }}</strong>
+                      <div class="impact">{{ '$%.2f'|format(scenario.savings_impact_monthly or 0) }}/mo</div>
+                    </div>
+                    <ul>
+                      {% for action in scenario.actions %}
+                        <li>{{ action }}</li>
+                      {% endfor %}
+                    </ul>
+                    <div class="small">{{ scenario.goal_impact }}</div>
+                    <div class="small muted">{{ scenario.tradeoff }}</div>
+                    <div class="small muted">{{ scenario.why_this }}</div>
+                    <button type="button" class="secondary" data-scenario-key="{{ scenario.scenario_key }}" data-chat-prompt="{{ scenario.chat_prompt }}">{{ scenario.cta_label or 'Ask AI to build this plan' }}</button>
+                  </article>
+                {% endfor %}
+              {% else %}
+                <div class="empty" style="grid-column: 1 / -1;">Upload recent spending and save a plan to unlock scenario analysis.</div>
+              {% endif %}
             </div>
           </div>
 
@@ -946,6 +1067,9 @@
       const COLLAPSED_MESSAGE_COUNT = 6;
       const SECTION_PREVIEW_COUNT = 2;
       let localReceiptErrorCounter = 0;
+      let structuredGoalTouched = false;
+      const chatForm = document.getElementById("chat-form");
+      const input = document.getElementById("chat-input");
       const collapsedSections = {
         "recommended-actions-list": true,
         "subscriptions-list": true,
@@ -1063,7 +1187,11 @@
         const financialProfile = profile.financial_profile || {};
         document.getElementById("monthly-income").value = financialProfile.monthly_income ?? 0;
         document.getElementById("fixed-expenses").value = financialProfile.fixed_expenses ?? 0;
-        document.getElementById("budgeting-goal").value = financialProfile.budgeting_goal || "";
+        document.getElementById("goal-name").value = financialProfile.goal_name || "";
+        document.getElementById("goal-target-amount").value = financialProfile.goal_target_amount ?? 0;
+        document.getElementById("goal-target-date").value = financialProfile.goal_target_date || "";
+        document.getElementById("current-saved-amount").value = financialProfile.current_saved_amount ?? 0;
+        structuredGoalTouched = false;
 
         renderTransactions(applyTransactionFilter(profile.transactions || []));
         renderSubscriptions(profile.subscriptions || []);
@@ -1071,6 +1199,8 @@
         renderTopInsights(profile.top_insights || []);
         renderRecommendedActions(profile.recommended_actions || []);
         renderCategoryBreakdown(profile.category_breakdown || [], profile.total_spent || 0);
+        renderSpendingProfile(profile.spending_profile || null);
+        renderScenarioAnalysis(profile.scenario_analysis || []);
         renderMonthlyPlanHistory(profile.monthly_plan_history || []);
         renderReceiptReviews(currentProfile.pending_receipts || []);
         renderMessages(profile.messages || []);
@@ -1262,6 +1392,44 @@
         `).join("");
       }
 
+      function renderSpendingProfile(spendingProfile) {
+        const card = document.getElementById("spending-profile-card");
+        if (!spendingProfile || !spendingProfile.name) {
+          card.innerHTML = '<div class="empty">Upload recent spending and save a plan to infer your spending profile.</div>';
+          return;
+        }
+
+        const reasons = (spendingProfile.reasons || []).map((reason) => `<li>${escapeHtml(reason)}</li>`).join("");
+        card.innerHTML = `
+          <strong id="spending-profile-name">${escapeHtml(spendingProfile.name)}</strong>
+          <p id="spending-profile-description" class="muted" style="margin:10px 0 0;">${escapeHtml(spendingProfile.description || "")}</p>
+          <ul id="spending-profile-reasons">${reasons}</ul>
+          <p id="spending-profile-why-this" class="small muted" style="margin:12px 0 0;">${escapeHtml(spendingProfile.why_this || "")}</p>
+        `;
+      }
+
+      function renderScenarioAnalysis(scenarios) {
+        const container = document.getElementById("scenario-analysis");
+        if (!scenarios.length) {
+          container.innerHTML = '<div class="empty" style="grid-column: 1 / -1;">Upload recent spending and save a plan to unlock scenario analysis.</div>';
+          return;
+        }
+
+        container.innerHTML = scenarios.map((scenario) => `
+          <article class="scenario-card">
+            <div>
+              <strong>${escapeHtml(scenario.title || "")}</strong>
+              <div class="impact">${money(scenario.savings_impact_monthly || 0)}/mo</div>
+            </div>
+            <ul>${(scenario.actions || []).map((action) => `<li>${escapeHtml(action)}</li>`).join("")}</ul>
+            <div class="small">${escapeHtml(scenario.goal_impact || "")}</div>
+            <div class="small muted">${escapeHtml(scenario.tradeoff || "")}</div>
+            <div class="small muted">${escapeHtml(scenario.why_this || "")}</div>
+            <button type="button" class="secondary" data-scenario-key="${escapeHtml(scenario.scenario_key || "")}" data-chat-prompt="${escapeHtml(scenario.chat_prompt || "")}">${escapeHtml(scenario.cta_label || "Ask AI to build this plan")}</button>
+          </article>
+        `).join("");
+      }
+
       function renderTopInsights(insights) {
         const list = document.getElementById("top-insights-list");
         if (!insights.length) {
@@ -1400,6 +1568,15 @@
         }
       }
 
+      ["goal-name", "goal-target-amount", "goal-target-date", "current-saved-amount"].forEach((fieldId) => {
+        document.getElementById(fieldId).addEventListener("input", () => {
+          structuredGoalTouched = true;
+        });
+        document.getElementById(fieldId).addEventListener("change", () => {
+          structuredGoalTouched = true;
+        });
+      });
+
       document.getElementById("profile-form").addEventListener("submit", async (event) => {
         event.preventDefault();
         const status = document.getElementById("profile-status");
@@ -1411,7 +1588,11 @@
           body: JSON.stringify({
             monthly_income: Number(document.getElementById("monthly-income").value || 0),
             fixed_expenses: Number(document.getElementById("fixed-expenses").value || 0),
-            budgeting_goal: document.getElementById("budgeting-goal").value.trim(),
+            goal_name: document.getElementById("goal-name").value.trim(),
+            goal_target_amount: Number(document.getElementById("goal-target-amount").value || 0),
+            goal_target_date: document.getElementById("goal-target-date").value,
+            current_saved_amount: Number(document.getElementById("current-saved-amount").value || 0),
+            structured_goal_intent: structuredGoalTouched ? "set_or_clear" : "unchanged",
             month: document.getElementById("month-selector").value,
           }),
         });
@@ -1523,16 +1704,15 @@
         status.textContent = "Receipt discarded.";
       });
 
-      document.getElementById("chat-form").addEventListener("submit", async (event) => {
+      chatForm.addEventListener("submit", async (event) => {
         event.preventDefault();
-        const input = document.getElementById("chat-input");
         const status = document.getElementById("chat-status");
         status.textContent = "AI Chatbot is responding...";
 
         const { ok, payload, error } = await requestJson("/api/chat", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ message: input.value, month: document.getElementById("month-selector").value }),
+          body: JSON.stringify({ message: input.value, month: document.getElementById("month-selector").value, scenario_key: chatForm.dataset.scenarioKey || "", scenario_prompt: chatForm.dataset.scenarioPrompt || "" }),
         });
 
         if (!ok) {
@@ -1543,15 +1723,33 @@
         renderProfile(payload.profile);
         status.textContent = payload.reply;
         input.value = "";
+        delete chatForm.dataset.scenarioKey;
+        delete chatForm.dataset.scenarioPrompt;
         showFullMessageHistory = false;
         scrollMessagesToBottom();
       });
 
-      document.getElementById("chat-input").addEventListener("keydown", (event) => {
+      input.addEventListener("keydown", (event) => {
         if (event.key === "Enter" && !event.shiftKey) {
           event.preventDefault();
-          document.getElementById("chat-form").requestSubmit();
+          chatForm.requestSubmit();
         }
+      });
+
+      document.getElementById("scenario-analysis").addEventListener("click", (event) => {
+        const button = event.target.closest("[data-scenario-key]");
+        if (!button) {
+          return;
+        }
+
+        const scenarioPrompt = button.getAttribute("data-chat-prompt") || "";
+        const scenarioKey = button.getAttribute("data-scenario-key") || "";
+        chatForm.dataset.scenarioKey = scenarioKey;
+        chatForm.dataset.scenarioPrompt = scenarioPrompt;
+        input.value = scenarioPrompt;
+        document.getElementById("chat-status").textContent = `Building the ${button.textContent.trim()} flow in chat...`;
+        input.focus();
+        chatForm.requestSubmit();
       });
 
       document.getElementById("transactions-category-filter").addEventListener("change", () => {
