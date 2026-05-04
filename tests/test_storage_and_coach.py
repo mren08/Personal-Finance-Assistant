@@ -910,6 +910,806 @@ class StorageTests(unittest.TestCase):
             self.assertEqual(summary["month_key"], "2026-05")
             self.assertEqual(summary["summary_text"], "May summary")
 
+    def test_dashboard_assigns_goal_focused_but_behind_before_reactive(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            storage = Storage(f"{tmpdir}/app.db")
+            user_id = storage.create_user("person@example.com", "secret123")
+            storage.add_transactions(
+                user_id,
+                [
+                    {
+                        "date": "2026-04-04",
+                        "description": "Restaurant Row",
+                        "amount": 420.0,
+                        "category": "Dining",
+                        "source": "statement",
+                    },
+                    {
+                        "date": "2026-04-08",
+                        "description": "Shopping Run",
+                        "amount": 250.0,
+                        "category": "Shopping",
+                        "source": "statement",
+                    },
+                ],
+            )
+            storage.upsert_financial_profile(
+                user_id,
+                monthly_income=3000,
+                fixed_expenses=2600,
+                budgeting_goal="",
+                goal_name="Japan trip",
+                goal_target_amount=2000,
+                goal_target_date="2026-06-01",
+                current_saved_amount=200,
+            )
+            storage.save_monthly_summary(
+                user_id,
+                month_key="2026-04",
+                income=3000,
+                fixed_expenses=2600,
+                tracked_spending=670,
+                recurring_monthly_total=0,
+                leftover_money=-270,
+                discretionary_remaining=-270,
+                summary_text="",
+            )
+
+            dashboard = storage.get_dashboard_data(user_id, "2026-04")
+
+            self.assertEqual(dashboard["spending_profile"]["name"], "Goal-Focused but Behind")
+            self.assertEqual(
+                dashboard["spending_profile"]["description"],
+                "You have a clear goal, but your current spending pace may delay your progress.",
+            )
+            self.assertGreaterEqual(len(dashboard["spending_profile"]["reasons"]), 2)
+            self.assertIn("Japan trip", dashboard["goal_summary"])
+
+    def test_dashboard_assigns_budget_optimizer_when_discretionary_spend_is_near_cap(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            storage = Storage(f"{tmpdir}/app.db")
+            user_id = storage.create_user("person@example.com", "secret123")
+            storage.add_transactions(
+                user_id,
+                [
+                    {
+                        "date": "2026-04-04",
+                        "description": "Restaurant Row",
+                        "amount": 500.0,
+                        "category": "Dining",
+                        "source": "statement",
+                    },
+                    {
+                        "date": "2026-04-01",
+                        "description": "Spotify",
+                        "amount": 70.0,
+                        "category": "Subscriptions",
+                        "source": "statement",
+                    },
+                    {
+                        "date": "2026-04-30",
+                        "description": "Spotify",
+                        "amount": 70.0,
+                        "category": "Subscriptions",
+                        "source": "statement",
+                    },
+                ],
+            )
+            storage.upsert_financial_profile(
+                user_id,
+                monthly_income=4000,
+                fixed_expenses=2200,
+                budgeting_goal="",
+                goal_name="",
+                goal_target_amount=0,
+                goal_target_date="",
+                current_saved_amount=0,
+            )
+            storage.save_monthly_summary(
+                user_id,
+                month_key="2026-04",
+                income=4000,
+                fixed_expenses=2200,
+                tracked_spending=640.0,
+                recurring_monthly_total=70.0,
+                leftover_money=1160.0,
+                discretionary_remaining=1160.0,
+                summary_text="",
+            )
+
+            dashboard = storage.get_dashboard_data(user_id, "2026-04")
+
+            self.assertEqual(dashboard["spending_profile"]["name"], "Budget Optimizer")
+            self.assertEqual(
+                dashboard["spending_profile"]["description"],
+                "You are generally staying within budget and may benefit most from small optimizations.",
+            )
+            self.assertEqual(
+                dashboard["spending_profile"]["reasons"][0],
+                "Your top discretionary category is Dining at 104% of its own cap.",
+            )
+            self.assertIn("recurring subscriptions totaling", dashboard["spending_profile"]["reasons"][1])
+            self.assertEqual(
+                dashboard["spending_profile"]["why_this"],
+                "Based on your current month transactions and the discretionary cap model.",
+            )
+            self.assertEqual(dashboard["goal_summary"], "")
+
+    def test_dashboard_long_dated_goal_is_not_marked_behind(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            storage = Storage(f"{tmpdir}/app.db")
+            user_id = storage.create_user("person@example.com", "secret123")
+            storage.add_transactions(
+                user_id,
+                [
+                    {
+                        "date": "2026-04-04",
+                        "description": "Dining Out",
+                        "amount": 120.0,
+                        "category": "Dining",
+                        "source": "statement",
+                    },
+                    {
+                        "date": "2026-04-08",
+                        "description": "Grocery Run",
+                        "amount": 80.0,
+                        "category": "Groceries",
+                        "source": "statement",
+                    },
+                ],
+            )
+            storage.upsert_financial_profile(
+                user_id,
+                monthly_income=3000,
+                fixed_expenses=2000,
+                budgeting_goal="",
+                goal_name="Vacation fund",
+                goal_target_amount=1200,
+                goal_target_date="2026-12-01",
+                current_saved_amount=200,
+            )
+            storage.save_monthly_summary(
+                user_id,
+                month_key="2026-04",
+                income=3000,
+                fixed_expenses=2000,
+                tracked_spending=200,
+                recurring_monthly_total=0,
+                leftover_money=350,
+                discretionary_remaining=350,
+                summary_text="",
+            )
+
+            dashboard = storage.get_dashboard_data(user_id, "2026-04")
+
+            self.assertNotEqual(dashboard["spending_profile"]["name"], "Goal-Focused but Behind")
+            self.assertEqual(dashboard["spending_profile"]["name"], "Flexible Spender")
+            self.assertEqual(
+                dashboard["spending_profile"]["description"],
+                "Your spending patterns are mixed, with room for more consistent planning.",
+            )
+            self.assertIn("2026-12-01", dashboard["goal_summary"])
+
+    def test_dashboard_uses_combined_discretionary_cap_for_budget_optimizer(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            storage = Storage(f"{tmpdir}/app.db")
+            user_id = storage.create_user("person@example.com", "secret123")
+            storage.add_transactions(
+                user_id,
+                [
+                    {
+                        "date": "2026-04-04",
+                        "description": "Dining Out",
+                        "amount": 220.0,
+                        "category": "Dining",
+                        "source": "statement",
+                    },
+                    {
+                        "date": "2026-04-08",
+                        "description": "Shopping Run",
+                        "amount": 160.0,
+                        "category": "Shopping",
+                        "source": "statement",
+                    },
+                ],
+            )
+            storage.upsert_financial_profile(
+                user_id,
+                monthly_income=2000,
+                fixed_expenses=1200,
+                budgeting_goal="",
+                goal_name="",
+                goal_target_amount=0,
+                goal_target_date="",
+                current_saved_amount=0,
+            )
+            storage.save_monthly_summary(
+                user_id,
+                month_key="2026-04",
+                income=2000,
+                fixed_expenses=1200,
+                tracked_spending=380,
+                recurring_monthly_total=0,
+                leftover_money=1420,
+                discretionary_remaining=1420,
+                summary_text="",
+            )
+
+            dashboard = storage.get_dashboard_data(user_id, "2026-04")
+
+            self.assertEqual(dashboard["spending_profile"]["name"], "Budget Optimizer")
+            self.assertEqual(
+                dashboard["spending_profile"]["description"],
+                "You are generally staying within budget and may benefit most from small optimizations.",
+            )
+            self.assertEqual(
+                dashboard["spending_profile"]["reasons"][0],
+                "Your top discretionary category is Dining at 92% of its own cap.",
+            )
+
+    def test_dashboard_budget_optimizer_explains_top_discretionary_category_not_top_overall_category(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            storage = Storage(f"{tmpdir}/app.db")
+            user_id = storage.create_user("person@example.com", "secret123")
+            storage.add_transactions(
+                user_id,
+                [
+                    {
+                        "date": "2026-04-04",
+                        "description": "Rent",
+                        "amount": 700.0,
+                        "category": "Housing",
+                        "source": "statement",
+                    },
+                    {
+                        "date": "2026-04-08",
+                        "description": "Dining Out",
+                        "amount": 420.0,
+                        "category": "Dining",
+                        "source": "statement",
+                    },
+                    {
+                        "date": "2026-04-10",
+                        "description": "Shopping Run",
+                        "amount": 340.0,
+                        "category": "Shopping",
+                        "source": "statement",
+                    },
+                ],
+            )
+            storage.upsert_financial_profile(
+                user_id,
+                monthly_income=4000,
+                fixed_expenses=2200,
+                budgeting_goal="",
+                goal_name="",
+                goal_target_amount=0,
+                goal_target_date="",
+                current_saved_amount=0,
+            )
+            storage.save_monthly_summary(
+                user_id,
+                month_key="2026-04",
+                income=4000,
+                fixed_expenses=2200,
+                tracked_spending=1460,
+                recurring_monthly_total=0,
+                leftover_money=340,
+                discretionary_remaining=760,
+                summary_text="",
+            )
+
+            dashboard = storage.get_dashboard_data(user_id, "2026-04")
+
+            self.assertEqual(dashboard["spending_profile"]["name"], "Budget Optimizer")
+            self.assertEqual(
+                dashboard["spending_profile"]["description"],
+                "You are generally staying within budget and may benefit most from small optimizations.",
+            )
+            self.assertEqual(
+                dashboard["spending_profile"]["reasons"][0],
+                "Your top discretionary category is Dining at 88% of its own cap.",
+            )
+            self.assertNotIn("Housing", dashboard["spending_profile"]["reasons"][0])
+
+    def test_dashboard_goal_deadline_at_month_end_is_more_lenient_than_month_start(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            storage = Storage(f"{tmpdir}/app.db")
+            user_id_late = storage.create_user("late@example.com", "secret123")
+            user_id_early = storage.create_user("early@example.com", "secret123")
+
+            for user_id in (user_id_late, user_id_early):
+                storage.add_transactions(
+                    user_id,
+                    [
+                        {
+                            "date": "2026-04-04",
+                            "description": "Dining Out",
+                            "amount": 120.0,
+                            "category": "Dining",
+                            "source": "statement",
+                        },
+                        {
+                            "date": "2026-04-08",
+                            "description": "Grocery Run",
+                            "amount": 80.0,
+                            "category": "Groceries",
+                            "source": "statement",
+                        },
+                    ],
+                )
+                storage.upsert_financial_profile(
+                    user_id,
+                    monthly_income=3000,
+                    fixed_expenses=2000,
+                    budgeting_goal="",
+                    goal_name="Vacation fund",
+                    goal_target_amount=1200,
+                    goal_target_date="2026-05-31" if user_id == user_id_late else "2026-05-01",
+                    current_saved_amount=200,
+                )
+                storage.save_monthly_summary(
+                    user_id,
+                    month_key="2026-04",
+                    income=3000,
+                    fixed_expenses=2000,
+                    tracked_spending=200,
+                    recurring_monthly_total=0,
+                    leftover_money=600,
+                    discretionary_remaining=600,
+                    summary_text="",
+                )
+
+            late_dashboard = storage.get_dashboard_data(user_id_late, "2026-04")
+            early_dashboard = storage.get_dashboard_data(user_id_early, "2026-04")
+
+            self.assertEqual(late_dashboard["spending_profile"]["name"], "Flexible Spender")
+            self.assertEqual(early_dashboard["spending_profile"]["name"], "Goal-Focused but Behind")
+            self.assertEqual(
+                early_dashboard["spending_profile"]["description"],
+                "You have a clear goal, but your current spending pace may delay your progress.",
+            )
+
+    def test_dashboard_invalid_goal_date_does_not_trigger_goal_focused_but_behind(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            storage = Storage(f"{tmpdir}/app.db")
+            user_id = storage.create_user("invalid-date@example.com", "secret123")
+            storage.add_transactions(
+                user_id,
+                [
+                    {
+                        "date": "2026-04-04",
+                        "description": "Dining Out",
+                        "amount": 120.0,
+                        "category": "Dining",
+                        "source": "statement",
+                    }
+                ],
+            )
+            storage.upsert_financial_profile(
+                user_id,
+                monthly_income=3000,
+                fixed_expenses=2000,
+                budgeting_goal="",
+                goal_name="Vacation fund",
+                goal_target_amount=1200,
+                goal_target_date="not-a-date",
+                current_saved_amount=200,
+            )
+            storage.save_monthly_summary(
+                user_id,
+                month_key="2026-04",
+                income=3000,
+                fixed_expenses=2000,
+                tracked_spending=120,
+                recurring_monthly_total=0,
+                leftover_money=800,
+                discretionary_remaining=800,
+                summary_text="",
+            )
+
+            dashboard = storage.get_dashboard_data(user_id, "2026-04")
+
+            self.assertNotEqual(dashboard["spending_profile"]["name"], "Goal-Focused but Behind")
+            self.assertEqual(dashboard["spending_profile"]["name"], "Flexible Spender")
+
+    def test_dashboard_reports_reactive_spender_when_spend_is_over_combined_cap(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            storage = Storage(f"{tmpdir}/app.db")
+            user_id = storage.create_user("reactive@example.com", "secret123")
+            storage.add_transactions(
+                user_id,
+                [
+                    {
+                        "date": "2026-04-04",
+                        "description": "Dining Out",
+                        "amount": 700.0,
+                        "category": "Dining",
+                        "source": "statement",
+                    },
+                    {
+                        "date": "2026-04-08",
+                        "description": "Shopping Run",
+                        "amount": 350.0,
+                        "category": "Shopping",
+                        "source": "statement",
+                    },
+                ],
+            )
+            storage.upsert_financial_profile(
+                user_id,
+                monthly_income=4000,
+                fixed_expenses=2200,
+                budgeting_goal="",
+                goal_name="",
+                goal_target_amount=0,
+                goal_target_date="2026-12-31",
+                current_saved_amount=0,
+            )
+            storage.save_monthly_summary(
+                user_id,
+                month_key="2026-04",
+                income=4000,
+                fixed_expenses=2200,
+                tracked_spending=1050,
+                recurring_monthly_total=0,
+                leftover_money=1000,
+                discretionary_remaining=-250,
+                summary_text="",
+            )
+
+            dashboard = storage.get_dashboard_data(user_id, "2026-04")
+
+            self.assertEqual(dashboard["spending_profile"]["name"], "Reactive Spender")
+            self.assertEqual(
+                dashboard["spending_profile"]["description"],
+                "You tend to overspend in discretionary categories, especially when expenses are not actively tracked.",
+            )
+            self.assertIn("more than 25%", dashboard["spending_profile"]["reasons"][1])
+
+    def test_dashboard_amount_only_goal_does_not_become_goal_focused_but_behind(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            storage = Storage(f"{tmpdir}/app.db")
+            user_id = storage.create_user("partial@example.com", "secret123")
+            storage.add_transactions(
+                user_id,
+                [
+                    {
+                        "date": "2026-04-04",
+                        "description": "Dining Out",
+                        "amount": 120.0,
+                        "category": "Dining",
+                        "source": "statement",
+                    }
+                ],
+            )
+            storage.upsert_financial_profile(
+                user_id,
+                monthly_income=3000,
+                fixed_expenses=2000,
+                budgeting_goal="",
+                goal_name="Vacation fund",
+                goal_target_amount=1200,
+                goal_target_date="",
+                current_saved_amount=200,
+            )
+            storage.save_monthly_summary(
+                user_id,
+                month_key="2026-04",
+                income=3000,
+                fixed_expenses=2000,
+                tracked_spending=120,
+                recurring_monthly_total=0,
+                leftover_money=800,
+                discretionary_remaining=800,
+                summary_text="",
+            )
+
+            dashboard = storage.get_dashboard_data(user_id, "2026-04")
+
+            self.assertNotEqual(dashboard["spending_profile"]["name"], "Goal-Focused but Behind")
+            self.assertEqual(dashboard["spending_profile"]["name"], "Flexible Spender")
+            self.assertEqual(
+                dashboard["spending_profile"]["description"],
+                "Your spending patterns are mixed, with room for more consistent planning.",
+            )
+
+    def test_dashboard_due_or_overdue_goal_with_unmet_amount_is_goal_focused_but_behind(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            storage = Storage(f"{tmpdir}/app.db")
+            user_id = storage.create_user("due@example.com", "secret123")
+            storage.add_transactions(
+                user_id,
+                [
+                    {
+                        "date": "2026-04-04",
+                        "description": "Dining Out",
+                        "amount": 120.0,
+                        "category": "Dining",
+                        "source": "statement",
+                    }
+                ],
+            )
+            storage.upsert_financial_profile(
+                user_id,
+                monthly_income=3000,
+                fixed_expenses=2000,
+                budgeting_goal="",
+                goal_name="Vacation fund",
+                goal_target_amount=1200,
+                goal_target_date="2026-04-01",
+                current_saved_amount=200,
+            )
+            storage.save_monthly_summary(
+                user_id,
+                month_key="2026-04",
+                income=3000,
+                fixed_expenses=2000,
+                tracked_spending=120,
+                recurring_monthly_total=0,
+                leftover_money=800,
+                discretionary_remaining=800,
+                summary_text="",
+            )
+
+            dashboard = storage.get_dashboard_data(user_id, "2026-04")
+
+            self.assertEqual(dashboard["spending_profile"]["name"], "Goal-Focused but Behind")
+            self.assertIn("Vacation fund", dashboard["goal_summary"])
+            self.assertEqual(
+                dashboard["spending_profile"]["description"],
+                "You have a clear goal, but your current spending pace may delay your progress.",
+            )
+
+    def test_dashboard_goal_with_missing_monthly_summary_can_still_be_goal_focused_but_behind(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            storage = Storage(f"{tmpdir}/app.db")
+            user_id = storage.create_user("nomonthly@example.com", "secret123")
+            storage.add_transactions(
+                user_id,
+                [
+                    {
+                        "date": "2026-04-04",
+                        "description": "Restaurant Row",
+                        "amount": 420.0,
+                        "category": "Dining",
+                        "source": "statement",
+                    },
+                    {
+                        "date": "2026-04-08",
+                        "description": "Shopping Run",
+                        "amount": 250.0,
+                        "category": "Shopping",
+                        "source": "statement",
+                    },
+                ],
+            )
+            storage.upsert_financial_profile(
+                user_id,
+                monthly_income=3000,
+                fixed_expenses=2600,
+                budgeting_goal="",
+                goal_name="Japan trip",
+                goal_target_amount=2000,
+                goal_target_date="2026-06-01",
+                current_saved_amount=200,
+            )
+
+            dashboard = storage.get_dashboard_data(user_id, "2026-04")
+
+            self.assertEqual(dashboard["spending_profile"]["name"], "Goal-Focused but Behind")
+            self.assertEqual(
+                dashboard["spending_profile"]["description"],
+                "You have a clear goal, but your current spending pace may delay your progress.",
+            )
+
+    def test_dashboard_missing_monthly_summary_goal_uses_effective_room_in_reason_text(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            storage = Storage(f"{tmpdir}/app.db")
+            user_id = storage.create_user("nomonthly-reason@example.com", "secret123")
+            storage.add_transactions(
+                user_id,
+                [
+                    {
+                        "date": "2026-04-04",
+                        "description": "Restaurant Row",
+                        "amount": 420.0,
+                        "category": "Dining",
+                        "source": "statement",
+                    },
+                    {
+                        "date": "2026-04-08",
+                        "description": "Shopping Run",
+                        "amount": 250.0,
+                        "category": "Shopping",
+                        "source": "statement",
+                    },
+                ],
+            )
+            storage.upsert_financial_profile(
+                user_id,
+                monthly_income=3000,
+                fixed_expenses=2600,
+                budgeting_goal="",
+                goal_name="Japan trip",
+                goal_target_amount=2000,
+                goal_target_date="2026-06-01",
+                current_saved_amount=200,
+            )
+
+            dashboard = storage.get_dashboard_data(user_id, "2026-04")
+
+            self.assertEqual(dashboard["spending_profile"]["name"], "Goal-Focused but Behind")
+            self.assertIn("Current month spending leaves about $-270.00", dashboard["spending_profile"]["reasons"][1])
+
+    def test_dashboard_goal_only_without_pace_data_does_not_default_to_behind(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            storage = Storage(f"{tmpdir}/app.db")
+            user_id = storage.create_user("goal-only@example.com", "secret123")
+            storage.upsert_financial_profile(
+                user_id,
+                monthly_income=0,
+                fixed_expenses=0,
+                budgeting_goal="",
+                goal_name="House down payment",
+                goal_target_amount=50000,
+                goal_target_date="2026-12-01",
+                current_saved_amount=10000,
+            )
+
+            dashboard = storage.get_dashboard_data(user_id, "2026-04")
+
+            self.assertNotEqual(dashboard["spending_profile"]["name"], "Goal-Focused but Behind")
+            self.assertEqual(dashboard["spending_profile"]["name"], "Flexible Spender")
+            self.assertIn("House down payment", dashboard["goal_summary"])
+
+    def test_dashboard_recurring_expenses_are_visible_in_spending_profile_reasons(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            storage = Storage(f"{tmpdir}/app.db")
+            user_id = storage.create_user("recurring@example.com", "secret123")
+            storage.add_transactions(
+                user_id,
+                [
+                    {
+                        "date": "2026-04-04",
+                        "description": "Dining Out",
+                        "amount": 220.0,
+                        "category": "Dining",
+                        "source": "statement",
+                    },
+                    {
+                        "date": "2026-04-01",
+                        "description": "Streaming",
+                        "amount": 80.0,
+                        "category": "Subscriptions",
+                        "source": "statement",
+                    },
+                    {
+                        "date": "2026-04-30",
+                        "description": "Streaming",
+                        "amount": 80.0,
+                        "category": "Subscriptions",
+                        "source": "statement",
+                    },
+                ],
+            )
+            storage.upsert_financial_profile(
+                user_id,
+                monthly_income=4000,
+                fixed_expenses=2200,
+                budgeting_goal="",
+                goal_name="",
+                goal_target_amount=0,
+                goal_target_date="",
+                current_saved_amount=0,
+            )
+            storage.save_monthly_summary(
+                user_id,
+                month_key="2026-04",
+                income=4000,
+                fixed_expenses=2200,
+                tracked_spending=380,
+                recurring_monthly_total=80,
+                leftover_money=1420,
+                discretionary_remaining=1420,
+                summary_text="",
+            )
+
+            dashboard = storage.get_dashboard_data(user_id, "2026-04")
+
+            self.assertTrue(any("recurring" in reason.lower() for reason in dashboard["spending_profile"]["reasons"]))
+            self.assertTrue(any("80.00" in reason for reason in dashboard["spending_profile"]["reasons"]))
+
+    def test_dashboard_coffee_rideshare_and_delivery_count_as_discretionary(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            storage = Storage(f"{tmpdir}/app.db")
+            user_id = storage.create_user("discretionary@example.com", "secret123")
+            storage.add_transactions(
+                user_id,
+                [
+                    {
+                        "date": "2026-04-02",
+                        "description": "Morning Coffee",
+                        "amount": 250.0,
+                        "category": "Coffee",
+                        "source": "statement",
+                    },
+                    {
+                        "date": "2026-04-05",
+                        "description": "Uber",
+                        "amount": 350.0,
+                        "category": "Rideshare",
+                        "source": "statement",
+                    },
+                    {
+                        "date": "2026-04-09",
+                        "description": "DoorDash",
+                        "amount": 250.0,
+                        "category": "Delivery",
+                        "source": "statement",
+                    },
+                ],
+            )
+            storage.upsert_financial_profile(
+                user_id,
+                monthly_income=4000,
+                fixed_expenses=2200,
+                budgeting_goal="",
+                goal_name="",
+                goal_target_amount=0,
+                goal_target_date="",
+                current_saved_amount=0,
+            )
+
+            dashboard = storage.get_dashboard_data(user_id, "2026-04")
+
+            self.assertEqual(dashboard["spending_profile"]["name"], "Budget Optimizer")
+            self.assertIn("Rideshare", dashboard["spending_profile"]["reasons"][0])
+            self.assertIn("Current discretionary spending is $850.00", dashboard["spending_profile"]["reasons"][1])
+
+    def test_dashboard_groceries_alone_do_not_trigger_discretionary_classification(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            storage = Storage(f"{tmpdir}/app.db")
+            user_id = storage.create_user("groceries@example.com", "secret123")
+            storage.add_transactions(
+                user_id,
+                [
+                    {
+                        "date": "2026-04-03",
+                        "description": "Grocery Run",
+                        "amount": 650.0,
+                        "category": "Groceries",
+                        "source": "statement",
+                    }
+                ],
+            )
+            storage.upsert_financial_profile(
+                user_id,
+                monthly_income=4000,
+                fixed_expenses=2200,
+                budgeting_goal="",
+                goal_name="",
+                goal_target_amount=0,
+                goal_target_date="",
+                current_saved_amount=0,
+            )
+            storage.save_monthly_summary(
+                user_id,
+                month_key="2026-04",
+                income=4000,
+                fixed_expenses=2200,
+                tracked_spending=650,
+                recurring_monthly_total=0,
+                leftover_money=1150,
+                discretionary_remaining=1150,
+                summary_text="",
+            )
+
+            dashboard = storage.get_dashboard_data(user_id, "2026-04")
+
+            self.assertEqual(dashboard["spending_profile"]["name"], "Flexible Spender")
+            self.assertNotIn("Groceries", " ".join(dashboard["spending_profile"]["reasons"]))
+
     def test_storage_rejects_orphan_profile_note_and_summary_writes(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             storage = Storage(f"{tmpdir}/app.db")

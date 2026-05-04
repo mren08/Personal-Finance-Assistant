@@ -1480,6 +1480,15 @@ class Storage:
             "monthly_plan_history": self.list_monthly_plans(user_id),
             "agent_notes": self.list_agent_notes(user_id, selected_month),
             "monthly_summary": monthly_summary,
+            "goal_summary": self._goal_summary_from_profile(financial_profile),
+            "spending_profile": self._spending_profile(
+                category_breakdown=category_breakdown,
+                monthly_summary=monthly_summary,
+                financial_profile=financial_profile,
+                recurring_expenses=recurring_expenses,
+                transactions=transactions,
+                selected_month=selected_month,
+            ),
             "top_insights": self._top_insights(
                 transactions=transactions,
                 selected_month=selected_month,
@@ -1501,6 +1510,299 @@ class Storage:
                 financial_profile=financial_profile,
             ),
             "pending_receipts": self.list_pending_receipt_extractions(user_id),
+        }
+
+    @staticmethod
+    def _build_goal_summary(
+        goal_name: str,
+        goal_target_amount: float,
+        goal_target_date: str,
+        current_saved_amount: float,
+    ) -> str:
+        if not goal_name and goal_target_amount <= 0 and not goal_target_date and current_saved_amount <= 0:
+            return ""
+
+        parts: list[str] = []
+        if goal_name:
+            parts.append(goal_name)
+        if goal_target_amount > 0:
+            parts.append(f"${goal_target_amount:,.0f}")
+        if goal_target_date:
+            parts.append(f"by {goal_target_date}")
+        if current_saved_amount > 0:
+            parts.append(f"saved so far: ${current_saved_amount:,.0f}")
+        return " | ".join(parts)
+
+    @classmethod
+    def _goal_summary_from_profile(cls, financial_profile: dict[str, Any] | None) -> str:
+        if not financial_profile:
+            return ""
+        return cls._build_goal_summary(
+            str(financial_profile.get("goal_name") or "").strip(),
+            float(financial_profile.get("goal_target_amount") or 0),
+            str(financial_profile.get("goal_target_date") or "").strip(),
+            float(financial_profile.get("current_saved_amount") or 0),
+        )
+
+    @staticmethod
+    def _discretionary_categories() -> set[str]:
+        return {
+            "Dining",
+            "Shopping",
+            "Entertainment",
+            "Travel",
+            "Coffee",
+            "Rideshare",
+            "Delivery",
+            "Subscriptions",
+            "Other",
+        }
+
+    @classmethod
+    def _is_discretionary_category(cls, category: str) -> bool:
+        normalized = str(category or "").strip().lower()
+        return normalized in {
+            "dining",
+            "shopping",
+            "entertainment",
+            "travel",
+            "coffee",
+            "rideshare",
+            "delivery",
+            "subscriptions",
+            "other",
+        }
+
+    @staticmethod
+    def _discretionary_cap_ratio(category: str) -> float:
+        normalized = str(category or "").strip().lower()
+        caps = BudgetRecommender.default_target_max_ratio()
+        cap_key_map = {
+            "dining": "Dining",
+            "shopping": "Shopping",
+            "entertainment": "Entertainment",
+            "travel": "Travel",
+            "subscriptions": "Subscriptions",
+            "rideshare": "Transportation",
+        }
+        cap_key = cap_key_map.get(normalized)
+        if cap_key:
+            ratio = caps.get(cap_key)
+            if ratio is not None:
+                return float(ratio)
+        if normalized in {"coffee", "delivery", "other"}:
+            return 0.05
+        return 0.05
+
+    @classmethod
+    def _discretionary_cap_amount(cls, category: str, monthly_income: float) -> float:
+        if monthly_income <= 0:
+            return 0.0
+        return round(monthly_income * cls._discretionary_cap_ratio(category), 2)
+
+    @classmethod
+    def _current_discretionary_spend(cls, category_breakdown: list[dict[str, Any]]) -> float:
+        return round(
+            sum(
+                float(item.get("amount") or 0)
+                for item in category_breakdown
+                if cls._is_discretionary_category(str(item.get("category") or ""))
+            ),
+            2,
+        )
+
+    @classmethod
+    def _discretionary_cap_total(
+        cls,
+        category_breakdown: list[dict[str, Any]],
+        financial_profile: dict[str, Any] | None,
+    ) -> float:
+        monthly_income = float((financial_profile or {}).get("monthly_income") or 0)
+        if monthly_income <= 0:
+            return 0.0
+
+        relevant_categories = [
+            str(item.get("category") or "")
+            for item in category_breakdown
+            if cls._is_discretionary_category(str(item.get("category") or ""))
+        ]
+        if not relevant_categories:
+            return 0.0
+
+        total_cap = sum(cls._discretionary_cap_amount(category, monthly_income) for category in relevant_categories)
+        return round(total_cap, 2)
+
+    @classmethod
+    def _top_discretionary_category(
+        cls,
+        category_breakdown: list[dict[str, Any]],
+    ) -> dict[str, Any] | None:
+        for item in category_breakdown:
+            if cls._is_discretionary_category(str(item.get("category") or "")):
+                return item
+        return None
+
+    @staticmethod
+    def _goal_pace_context(
+        financial_profile: dict[str, Any] | None,
+        monthly_summary: dict[str, Any] | None,
+        transactions: list[dict[str, Any]],
+        selected_month: str | None,
+    ) -> dict[str, Any]:
+        if not financial_profile:
+            return {"status": None, "effective_discretionary_remaining": None}
+
+        goal_name = str(financial_profile.get("goal_name") or "").strip()
+        goal_target_amount = float(financial_profile.get("goal_target_amount") or 0)
+        goal_target_date = str(financial_profile.get("goal_target_date") or "").strip()
+        current_saved_amount = float(financial_profile.get("current_saved_amount") or 0)
+        if not goal_name and goal_target_amount <= 0 and not goal_target_date and current_saved_amount <= 0:
+            return {"status": None, "effective_discretionary_remaining": None}
+        if goal_target_amount <= 0 or not goal_target_date:
+            return {"status": None, "effective_discretionary_remaining": None}
+
+        remaining_goal = max(0.0, goal_target_amount - current_saved_amount)
+        if remaining_goal <= 0:
+            return {"status": "on_track", "effective_discretionary_remaining": None}
+
+        pace_month_key = selected_month or (Storage._month_key_from_date(transactions[0]["date"]) if transactions else None)
+        if not pace_month_key and monthly_summary:
+            pace_month_key = str(monthly_summary.get("month_key") or "").strip() or None
+        if not pace_month_key:
+            return {"status": None, "effective_discretionary_remaining": None}
+
+        current_month_spend = round(
+            sum(
+                float(transaction.get("amount") or 0)
+                for transaction in transactions
+                if Storage._month_key_from_date(str(transaction.get("date") or "")) == pace_month_key
+            ),
+            2,
+        )
+        proxy_discretionary_remaining = None
+        monthly_income = float(financial_profile.get("monthly_income") or 0)
+        fixed_expenses = float(financial_profile.get("fixed_expenses") or 0)
+        if monthly_income > 0:
+            proxy_discretionary_remaining = round(monthly_income - fixed_expenses - current_month_spend, 2)
+
+        summary_discretionary_remaining = None
+        if monthly_summary:
+            raw_discretionary_remaining = monthly_summary.get("discretionary_remaining")
+            if raw_discretionary_remaining not in (None, ""):
+                try:
+                    summary_discretionary_remaining = float(raw_discretionary_remaining)
+                except (TypeError, ValueError):
+                    summary_discretionary_remaining = None
+        discretionary_remaining = summary_discretionary_remaining
+        if discretionary_remaining is None:
+            discretionary_remaining = proxy_discretionary_remaining
+        if discretionary_remaining is None:
+            return {"status": None, "effective_discretionary_remaining": None}
+
+        try:
+            pace_month = datetime.strptime(f"{pace_month_key}-01", "%Y-%m-%d").date()
+            target_date = datetime.strptime(goal_target_date, "%Y-%m-%d").date()
+        except ValueError:
+            return {"status": None, "effective_discretionary_remaining": discretionary_remaining}
+
+        if target_date <= pace_month:
+            return {"status": "behind", "effective_discretionary_remaining": discretionary_remaining}
+
+        days_remaining = (target_date - pace_month).days
+        months_remaining = days_remaining / 30.4375
+        required_monthly_saving = remaining_goal / months_remaining
+        if discretionary_remaining < required_monthly_saving:
+            return {"status": "behind", "effective_discretionary_remaining": discretionary_remaining}
+
+        return {"status": "on_track", "effective_discretionary_remaining": discretionary_remaining}
+
+    @classmethod
+    def _spending_profile(
+        cls,
+        category_breakdown: list[dict[str, Any]],
+        monthly_summary: dict[str, Any] | None,
+        financial_profile: dict[str, Any] | None,
+        recurring_expenses: list[dict[str, Any]],
+        transactions: list[dict[str, Any]],
+        selected_month: str | None,
+    ) -> dict[str, Any]:
+        goal_summary = cls._goal_summary_from_profile(financial_profile)
+        current_discretionary_spend = cls._current_discretionary_spend(category_breakdown)
+        discretionary_cap_total = cls._discretionary_cap_total(category_breakdown, financial_profile)
+        goal_pace_context = cls._goal_pace_context(financial_profile, monthly_summary, transactions, selected_month)
+        goal_pace_status = goal_pace_context["status"]
+        effective_discretionary_remaining = goal_pace_context["effective_discretionary_remaining"]
+        top_discretionary_category = cls._top_discretionary_category(category_breakdown)
+        top_category_name = str(top_discretionary_category.get("category") or "") if top_discretionary_category else ""
+        top_category_amount = float(top_discretionary_category.get("amount") or 0) if top_discretionary_category else 0.0
+        discretionary_remaining = float((monthly_summary or {}).get("discretionary_remaining") or 0)
+        recurring_monthly_total = round(sum(float(item.get("monthly_equivalent") or 0) for item in recurring_expenses), 2)
+        recurring_note = None
+        if recurring_expenses:
+            recurring_note = f"You have {len(recurring_expenses)} recurring subscriptions totaling ${recurring_monthly_total:,.2f}/month."
+        elif monthly_summary and float(monthly_summary.get("recurring_monthly_total") or 0) > 0:
+            recurring_note = (
+                f"Your current summary includes ${float(monthly_summary.get('recurring_monthly_total') or 0):,.2f}/month in recurring charges."
+            )
+
+        if goal_pace_status == "behind":
+            return {
+                "name": "Goal-Focused but Behind",
+                "description": "You have a clear goal, but your current spending pace may delay your progress.",
+                "reasons": [
+                    f"Goal summary: {goal_summary}.",
+                    f"Current month spending leaves about ${effective_discretionary_remaining if effective_discretionary_remaining is not None else discretionary_remaining:,.2f} of discretionary room.",
+                    *( [recurring_note] if recurring_note else [] ),
+                    "The remaining goal balance needs more room than this month is currently leaving available.",
+                ],
+                "why_this": "Based on your current month transactions and structured goal data.",
+            }
+
+        if discretionary_cap_total > 0 and current_discretionary_spend > discretionary_cap_total * 1.25:
+            return {
+                "name": "Reactive Spender",
+                "description": "You tend to overspend in discretionary categories, especially when expenses are not actively tracked.",
+                "reasons": [
+                    f"Current discretionary spending is ${current_discretionary_spend:,.2f} against a cap model of ${discretionary_cap_total:,.2f}.",
+                    "That is more than 25% above the discretionary cap model.",
+                    *( [recurring_note] if recurring_note else [] ),
+                    "The current month is already under pressure, so spending is reacting to the balance left.",
+                ],
+                "why_this": "Based on your current month transactions and the discretionary cap model.",
+            }
+
+        if discretionary_cap_total > 0 and discretionary_cap_total * 0.9 <= current_discretionary_spend <= discretionary_cap_total * 1.1:
+            top_category_cap = cls._discretionary_cap_amount(
+                top_category_name,
+                float((financial_profile or {}).get("monthly_income") or 0),
+            )
+            top_category_utilization = (
+                round((top_category_amount / top_category_cap) * 100, 0)
+                if top_category_cap > 0 and top_category_amount > 0
+                else 0.0
+            )
+            return {
+                "name": "Budget Optimizer",
+                "description": "You are generally staying within budget and may benefit most from small optimizations.",
+                "reasons": [
+                    f"Your top discretionary category is {top_category_name or 'unknown'} at {top_category_utilization:.0f}% of its own cap.",
+                    *( [recurring_note] if recurring_note else [] ),
+                    f"Current discretionary spending is ${current_discretionary_spend:,.2f}, which stays within the +/-10% optimizer window around the cap model.",
+                    "You are close enough to budget targets that small adjustments can matter.",
+                ],
+                "why_this": "Based on your current month transactions and the discretionary cap model.",
+            }
+
+        return {
+            "name": "Flexible Spender",
+            "description": "Your spending patterns are mixed, with room for more consistent planning.",
+            "reasons": [
+                "Current month spending is outside the tighter optimizer window but not far enough above the cap model to be reactive.",
+                *( [recurring_note] if recurring_note else [] ),
+                "There is room to make spending more consistent without immediate pressure.",
+                "This month is still adaptable, but not especially tuned.",
+            ],
+            "why_this": "Based on your current month transactions and the discretionary cap model.",
         }
 
     @staticmethod
