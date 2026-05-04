@@ -1035,6 +1035,1220 @@ class StorageTests(unittest.TestCase):
             )
             self.assertEqual(dashboard["goal_summary"], "")
 
+    def test_dashboard_builds_three_scenario_cards_with_goal_impact(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            storage = Storage(f"{tmpdir}/app.db")
+            user_id = storage.create_user("person@example.com", "secret123")
+            storage.add_transactions(
+                user_id,
+                [
+                    {
+                        "date": "2026-03-28",
+                        "description": "Old Month Dining",
+                        "amount": 310.0,
+                        "category": "Dining",
+                        "source": "statement",
+                    },
+                    {
+                        "date": "2026-04-04",
+                        "description": "Dining Out",
+                        "amount": 420.0,
+                        "category": "Dining",
+                        "source": "statement",
+                    },
+                    {
+                        "date": "2026-04-08",
+                        "description": "Shopping Run",
+                        "amount": 260.0,
+                        "category": "Shopping",
+                        "source": "statement",
+                    },
+                    {
+                        "date": "2026-04-09",
+                        "description": "Netflix",
+                        "amount": 15.99,
+                        "category": "Subscriptions",
+                        "source": "statement",
+                    },
+                    {
+                        "date": "2026-04-10",
+                        "description": "Spotify",
+                        "amount": 9.99,
+                        "category": "Subscriptions",
+                        "source": "statement",
+                    },
+                ],
+            )
+            storage.upsert_financial_profile(
+                user_id,
+                monthly_income=4000,
+                fixed_expenses=2200,
+                budgeting_goal="",
+                goal_name="Japan trip",
+                goal_target_amount=2000,
+                goal_target_date="2026-08-01",
+                current_saved_amount=300,
+            )
+            storage.save_monthly_summary(
+                user_id,
+                month_key="2026-04",
+                income=4000,
+                fixed_expenses=2200,
+                tracked_spending=705.98,
+                recurring_monthly_total=25.98,
+                leftover_money=1094.02,
+                discretionary_remaining=1094.02,
+                summary_text="",
+            )
+
+            dashboard = storage.get_dashboard_data(user_id, "2026-04")
+
+            scenarios = dashboard["scenario_analysis"]
+            self.assertEqual(len(scenarios), 3)
+            self.assertEqual(
+                [item["title"] for item in scenarios],
+                [
+                    "Stay on Current Path",
+                    "Moderate Adjustment",
+                    "Aggressive Savings",
+                ],
+            )
+            self.assertEqual(
+                [item["scenario_key"] for item in scenarios],
+                [
+                    "stay_on_current_path",
+                    "moderate_adjustment",
+                    "aggressive_savings",
+                ],
+            )
+
+            expected_fields = {
+                "title",
+                "savings_impact_monthly",
+                "actions",
+                "goal_impact",
+                "tradeoff",
+                "why_this",
+                "chat_prompt",
+                "cta_label",
+                "scenario_key",
+            }
+            for scenario in scenarios:
+                self.assertTrue(expected_fields.issubset(scenario.keys()))
+                self.assertGreaterEqual(len(scenario["actions"]), 2)
+                self.assertLessEqual(len(scenario["actions"]), 3)
+                self.assertEqual(scenario["cta_label"], "Ask AI to build this plan")
+                self.assertEqual(
+                    scenario["why_this"],
+                    "Based on your uploaded transactions, budget caps, recurring subscriptions, and savings goal.",
+                )
+
+            self.assertEqual(scenarios[0]["savings_impact_monthly"], 0)
+            self.assertTrue(any("current path" in action.lower() for action in scenarios[0]["actions"]))
+            self.assertIn("may", scenarios[0]["goal_impact"].lower())
+
+            self.assertGreater(scenarios[1]["savings_impact_monthly"], 0)
+            self.assertTrue(any("dining" in action.lower() for action in scenarios[1]["actions"]))
+            self.assertTrue(any("subscription" in action.lower() for action in scenarios[1]["actions"]))
+            self.assertIn("ask ai", scenarios[1]["cta_label"].lower())
+            self.assertIn("moderate adjustment plan", scenarios[1]["chat_prompt"].lower())
+            self.assertIn("may", scenarios[1]["tradeoff"].lower())
+
+            self.assertGreater(scenarios[2]["savings_impact_monthly"], scenarios[1]["savings_impact_monthly"])
+            self.assertTrue(any("shopping" in action.lower() for action in scenarios[2]["actions"]))
+            self.assertTrue(any("subscription" in action.lower() for action in scenarios[2]["actions"]))
+
+    def test_dashboard_scenarios_fallback_when_not_enough_data(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            storage = Storage(f"{tmpdir}/app.db")
+            user_id = storage.create_user("person@example.com", "secret123")
+            storage.upsert_financial_profile(
+                user_id,
+                monthly_income=0,
+                fixed_expenses=0,
+                budgeting_goal="",
+                goal_name="",
+                goal_target_amount=0,
+                goal_target_date="",
+                current_saved_amount=0,
+            )
+
+            dashboard = storage.get_dashboard_data(user_id, None)
+
+            scenarios = dashboard["scenario_analysis"]
+            self.assertEqual(len(scenarios), 3)
+            self.assertEqual(
+                [item["title"] for item in scenarios],
+                [
+                    "Stay on Current Path",
+                    "Moderate Adjustment",
+                    "Aggressive Savings",
+                ],
+            )
+            for scenario in scenarios:
+                self.assertIn("Upload more transaction history", scenario["tradeoff"])
+                self.assertIn("could", scenario["goal_impact"].lower())
+                self.assertGreaterEqual(len(scenario["actions"]), 2)
+                self.assertLessEqual(len(scenario["actions"]), 3)
+                self.assertTrue(
+                    all("Upload more transaction history" in action for action in scenario["actions"])
+                )
+                self.assertEqual(scenario["cta_label"], "Ask AI to build this plan")
+                self.assertEqual(
+                    scenario["why_this"],
+                    "Based on your uploaded transactions, budget caps, recurring subscriptions, and savings goal.",
+                )
+
+    def test_dashboard_scenarios_fallback_for_profile_only_user_without_month_evidence(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            storage = Storage(f"{tmpdir}/app.db")
+            user_id = storage.create_user("person@example.com", "secret123")
+            storage.upsert_financial_profile(
+                user_id,
+                monthly_income=4500,
+                fixed_expenses=2300,
+                budgeting_goal="",
+                goal_name="Emergency fund",
+                goal_target_amount=5000,
+                goal_target_date="2026-12-31",
+                current_saved_amount=800,
+            )
+
+            dashboard = storage.get_dashboard_data(user_id, None)
+
+            scenarios = dashboard["scenario_analysis"]
+            self.assertEqual(len(scenarios), 3)
+            for scenario in scenarios:
+                self.assertIn("Upload more transaction history", scenario["tradeoff"])
+                self.assertGreaterEqual(len(scenario["actions"]), 2)
+                self.assertLessEqual(len(scenario["actions"]), 3)
+                self.assertEqual(scenario["cta_label"], "Ask AI to build this plan")
+                self.assertEqual(
+                    scenario["why_this"],
+                    "Based on your uploaded transactions, budget caps, recurring subscriptions, and savings goal.",
+                )
+
+    def test_dashboard_scenarios_use_resolved_selected_month_when_month_key_is_omitted(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            storage = Storage(f"{tmpdir}/app.db")
+            user_id = storage.create_user("person@example.com", "secret123")
+            storage.add_transactions(
+                user_id,
+                [
+                    {
+                        "date": "2026-03-05",
+                        "description": "Dining Out",
+                        "amount": 180.0,
+                        "category": "Dining",
+                        "source": "statement",
+                    },
+                    {
+                        "date": "2026-04-06",
+                        "description": "Shopping Run",
+                        "amount": 210.0,
+                        "category": "Shopping",
+                        "source": "statement",
+                    },
+                    {
+                        "date": "2026-04-10",
+                        "description": "Netflix",
+                        "amount": 18.99,
+                        "category": "Subscriptions",
+                        "source": "statement",
+                    },
+                ],
+            )
+            storage.upsert_financial_profile(
+                user_id,
+                monthly_income=4200,
+                fixed_expenses=2200,
+                budgeting_goal="",
+                goal_name="Trip fund",
+                goal_target_amount=1500,
+                goal_target_date="2026-10-01",
+                current_saved_amount=300,
+            )
+            storage.save_monthly_summary(
+                user_id,
+                month_key="2026-04",
+                income=4200,
+                fixed_expenses=2200,
+                tracked_spending=228.99,
+                recurring_monthly_total=18.99,
+                leftover_money=1771.01,
+                discretionary_remaining=1771.01,
+                summary_text="",
+            )
+
+            dashboard = storage.get_dashboard_data(user_id, None)
+
+            scenarios = dashboard["scenario_analysis"]
+            self.assertEqual(len(scenarios), 3)
+            self.assertEqual(dashboard["selected_month"], "2026-04")
+            for scenario in scenarios:
+                self.assertNotIn("Upload more transaction history", scenario["tradeoff"])
+                self.assertEqual(
+                    scenario["why_this"],
+                    "Based on your uploaded transactions, budget caps, recurring subscriptions, and savings goal.",
+                )
+            self.assertTrue(any("shopping" in action.lower() for action in scenarios[1]["actions"]))
+
+    def test_dashboard_scenarios_fallback_when_selected_month_has_no_discretionary_or_recurring_evidence(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            storage = Storage(f"{tmpdir}/app.db")
+            user_id = storage.create_user("person@example.com", "secret123")
+            storage.add_transactions(
+                user_id,
+                [
+                    {
+                        "date": "2026-03-08",
+                        "description": "Dining Out",
+                        "amount": 160.0,
+                        "category": "Dining",
+                        "source": "statement",
+                    },
+                    {
+                        "date": "2026-04-04",
+                        "description": "Grocery Run",
+                        "amount": 120.0,
+                        "category": "Groceries",
+                        "source": "statement",
+                    },
+                    {
+                        "date": "2026-04-10",
+                        "description": "Pharmacy",
+                        "amount": 35.0,
+                        "category": "Health",
+                        "source": "statement",
+                    },
+                ],
+            )
+            storage.upsert_financial_profile(
+                user_id,
+                monthly_income=3500,
+                fixed_expenses=2000,
+                budgeting_goal="",
+                goal_name="Emergency fund",
+                goal_target_amount=2500,
+                goal_target_date="2026-12-31",
+                current_saved_amount=500,
+            )
+            storage.save_monthly_summary(
+                user_id,
+                month_key="2026-04",
+                income=3500,
+                fixed_expenses=2000,
+                tracked_spending=155.0,
+                recurring_monthly_total=0,
+                leftover_money=1345.0,
+                discretionary_remaining=1345.0,
+                summary_text="",
+            )
+
+            dashboard = storage.get_dashboard_data(user_id, "2026-04")
+
+            scenarios = dashboard["scenario_analysis"]
+            self.assertEqual(len(scenarios), 3)
+            for scenario in scenarios:
+                self.assertIn("Upload more transaction history", scenario["tradeoff"])
+                self.assertTrue(
+                    all("Upload more transaction history" in action for action in scenario["actions"])
+                )
+                self.assertEqual(
+                    scenario["why_this"],
+                    "Based on your uploaded transactions, budget caps, recurring subscriptions, and savings goal.",
+                )
+
+    def test_dashboard_scenarios_fallback_when_selected_month_has_only_one_small_discretionary_transaction(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            storage = Storage(f"{tmpdir}/app.db")
+            user_id = storage.create_user("person@example.com", "secret123")
+            storage.add_transactions(
+                user_id,
+                [
+                    {
+                        "date": "2026-03-06",
+                        "description": "Dining Out",
+                        "amount": 180.0,
+                        "category": "Dining",
+                        "source": "statement",
+                    },
+                    {
+                        "date": "2026-04-05",
+                        "description": "Coffee Shop",
+                        "amount": 6.5,
+                        "category": "Coffee",
+                        "source": "statement",
+                    },
+                ],
+            )
+            storage.upsert_financial_profile(
+                user_id,
+                monthly_income=3600,
+                fixed_expenses=2100,
+                budgeting_goal="",
+                goal_name="Buffer",
+                goal_target_amount=1200,
+                goal_target_date="2026-10-01",
+                current_saved_amount=300,
+            )
+            storage.save_monthly_summary(
+                user_id,
+                month_key="2026-04",
+                income=3600,
+                fixed_expenses=2100,
+                tracked_spending=6.5,
+                recurring_monthly_total=0,
+                leftover_money=1493.5,
+                discretionary_remaining=1493.5,
+                summary_text="",
+            )
+
+            dashboard = storage.get_dashboard_data(user_id, "2026-04")
+
+            scenarios = dashboard["scenario_analysis"]
+            self.assertEqual(len(scenarios), 3)
+            for scenario in scenarios:
+                self.assertIn("Upload more transaction history", scenario["tradeoff"])
+                self.assertTrue(
+                    all("Upload more transaction history" in action for action in scenario["actions"])
+                )
+                self.assertEqual(
+                    scenario["why_this"],
+                    "Based on your uploaded transactions, budget caps, recurring subscriptions, and savings goal.",
+                )
+
+    def test_dashboard_scenarios_do_not_double_count_subscriptions_category_cuts(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            storage = Storage(f"{tmpdir}/app.db")
+            user_id = storage.create_user("person@example.com", "secret123")
+            storage.add_transactions(
+                user_id,
+                [
+                    {
+                        "date": "2026-03-05",
+                        "description": "Netflix",
+                        "amount": 18.99,
+                        "category": "Subscriptions",
+                        "source": "statement",
+                    },
+                    {
+                        "date": "2026-03-06",
+                        "description": "Spotify",
+                        "amount": 11.99,
+                        "category": "Subscriptions",
+                        "source": "statement",
+                    },
+                    {
+                        "date": "2026-04-05",
+                        "description": "Netflix",
+                        "amount": 18.99,
+                        "category": "Subscriptions",
+                        "source": "statement",
+                    },
+                    {
+                        "date": "2026-04-06",
+                        "description": "Spotify",
+                        "amount": 11.99,
+                        "category": "Subscriptions",
+                        "source": "statement",
+                    },
+                    {
+                        "date": "2026-04-10",
+                        "description": "Takeout",
+                        "amount": 24.0,
+                        "category": "Dining",
+                        "source": "statement",
+                    },
+                ],
+            )
+            storage.upsert_financial_profile(
+                user_id,
+                monthly_income=3200,
+                fixed_expenses=1900,
+                budgeting_goal="",
+                goal_name="Buffer",
+                goal_target_amount=1000,
+                goal_target_date="2026-09-01",
+                current_saved_amount=200,
+            )
+            storage.save_monthly_summary(
+                user_id,
+                month_key="2026-04",
+                income=3200,
+                fixed_expenses=1900,
+                tracked_spending=54.98,
+                recurring_monthly_total=30.98,
+                leftover_money=1245.02,
+                discretionary_remaining=1245.02,
+                summary_text="",
+            )
+
+            dashboard = storage.get_dashboard_data(user_id, "2026-04")
+
+            moderate = dashboard["scenario_analysis"][1]
+            aggressive = dashboard["scenario_analysis"][2]
+
+            self.assertFalse(any("reduce subscriptions" in action.lower() for action in moderate["actions"]))
+            self.assertFalse(any("reduce subscriptions" in action.lower() for action in aggressive["actions"]))
+            self.assertLessEqual(moderate["savings_impact_monthly"], 30.98)
+            self.assertLessEqual(aggressive["savings_impact_monthly"], 30.98 + round(24.0 * 0.35, 2))
+
+    def test_dashboard_aggressive_savings_keeps_second_discretionary_category_when_only_one_is_overspent(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            storage = Storage(f"{tmpdir}/app.db")
+            user_id = storage.create_user("person@example.com", "secret123")
+            storage.add_transactions(
+                user_id,
+                [
+                    {
+                        "date": "2026-03-05",
+                        "description": "Netflix",
+                        "amount": 15.99,
+                        "category": "Subscriptions",
+                        "source": "statement",
+                    },
+                    {
+                        "date": "2026-04-04",
+                        "description": "Dining Out",
+                        "amount": 700.0,
+                        "category": "Dining",
+                        "source": "statement",
+                    },
+                    {
+                        "date": "2026-04-08",
+                        "description": "Shopping Run",
+                        "amount": 180.0,
+                        "category": "Shopping",
+                        "source": "statement",
+                    },
+                    {
+                        "date": "2026-04-10",
+                        "description": "Netflix",
+                        "amount": 15.99,
+                        "category": "Subscriptions",
+                        "source": "statement",
+                    },
+                ],
+            )
+            storage.upsert_financial_profile(
+                user_id,
+                monthly_income=4000,
+                fixed_expenses=2200,
+                budgeting_goal="",
+                goal_name="Trip fund",
+                goal_target_amount=1800,
+                goal_target_date="2026-11-01",
+                current_saved_amount=250,
+            )
+            storage.save_monthly_summary(
+                user_id,
+                month_key="2026-04",
+                income=4000,
+                fixed_expenses=2200,
+                tracked_spending=895.99,
+                recurring_monthly_total=15.99,
+                leftover_money=904.01,
+                discretionary_remaining=904.01,
+                summary_text="",
+            )
+
+            dashboard = storage.get_dashboard_data(user_id, "2026-04")
+
+            aggressive = dashboard["scenario_analysis"][2]
+            self.assertTrue(any("dining" in action.lower() for action in aggressive["actions"]))
+            self.assertTrue(any("shopping" in action.lower() for action in aggressive["actions"]))
+
+    def test_dashboard_scenarios_ignore_prior_month_only_recurring_evidence_for_selected_month(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            storage = Storage(f"{tmpdir}/app.db")
+            user_id = storage.create_user("person@example.com", "secret123")
+            storage.add_transactions(
+                user_id,
+                [
+                    {
+                        "date": "2026-01-05",
+                        "description": "Netflix",
+                        "amount": 15.99,
+                        "category": "Subscriptions",
+                        "source": "statement",
+                    },
+                    {
+                        "date": "2026-02-05",
+                        "description": "Netflix",
+                        "amount": 15.99,
+                        "category": "Subscriptions",
+                        "source": "statement",
+                    },
+                    {
+                        "date": "2026-04-05",
+                        "description": "Coffee Shop",
+                        "amount": 7.25,
+                        "category": "Coffee",
+                        "source": "statement",
+                    },
+                ],
+            )
+            storage.upsert_financial_profile(
+                user_id,
+                monthly_income=3800,
+                fixed_expenses=2200,
+                budgeting_goal="",
+                goal_name="Buffer",
+                goal_target_amount=1000,
+                goal_target_date="2026-10-01",
+                current_saved_amount=250,
+            )
+            storage.save_monthly_summary(
+                user_id,
+                month_key="2026-04",
+                income=3800,
+                fixed_expenses=2200,
+                tracked_spending=7.25,
+                recurring_monthly_total=0,
+                leftover_money=1592.75,
+                discretionary_remaining=1592.75,
+                summary_text="",
+            )
+
+            dashboard = storage.get_dashboard_data(user_id, "2026-04")
+
+            scenarios = dashboard["scenario_analysis"]
+            self.assertEqual(len(scenarios), 3)
+            for scenario in scenarios:
+                self.assertIn("Upload more transaction history", scenario["tradeoff"])
+
+    def test_dashboard_scenarios_do_not_recommend_fixed_bills_as_subscription_cuts(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            storage = Storage(f"{tmpdir}/app.db")
+            user_id = storage.create_user("person@example.com", "secret123")
+            storage.add_transactions(
+                user_id,
+                [
+                    {
+                        "date": "2026-03-02",
+                        "description": "Verizon Wireless",
+                        "amount": 85.0,
+                        "category": "Phone",
+                        "source": "statement",
+                    },
+                    {
+                        "date": "2026-04-02",
+                        "description": "Verizon Wireless",
+                        "amount": 85.0,
+                        "category": "Phone",
+                        "source": "statement",
+                    },
+                    {
+                        "date": "2026-03-07",
+                        "description": "Spotify",
+                        "amount": 11.99,
+                        "category": "Subscriptions",
+                        "source": "statement",
+                    },
+                    {
+                        "date": "2026-04-07",
+                        "description": "Spotify",
+                        "amount": 11.99,
+                        "category": "Subscriptions",
+                        "source": "statement",
+                    },
+                    {
+                        "date": "2026-04-10",
+                        "description": "Dining Out",
+                        "amount": 140.0,
+                        "category": "Dining",
+                        "source": "statement",
+                    },
+                ],
+            )
+            storage.upsert_financial_profile(
+                user_id,
+                monthly_income=4100,
+                fixed_expenses=2300,
+                budgeting_goal="",
+                goal_name="Trip",
+                goal_target_amount=1800,
+                goal_target_date="2026-11-01",
+                current_saved_amount=350,
+            )
+            storage.save_monthly_summary(
+                user_id,
+                month_key="2026-04",
+                income=4100,
+                fixed_expenses=2300,
+                tracked_spending=236.99,
+                recurring_monthly_total=96.99,
+                leftover_money=1563.01,
+                discretionary_remaining=1563.01,
+                summary_text="",
+            )
+
+            dashboard = storage.get_dashboard_data(user_id, "2026-04")
+
+            moderate = dashboard["scenario_analysis"][1]
+            aggressive = dashboard["scenario_analysis"][2]
+            self.assertFalse(any("verizon" in action.lower() for action in moderate["actions"]))
+            self.assertFalse(any("wireless" in action.lower() for action in moderate["actions"]))
+            self.assertFalse(any("verizon" in action.lower() for action in aggressive["actions"]))
+            self.assertFalse(any("wireless" in action.lower() for action in aggressive["actions"]))
+            self.assertTrue(any("spotify" in action.lower() for action in moderate["actions"] + aggressive["actions"]))
+
+    def test_dashboard_scenarios_do_not_recommend_phone_category_bill_even_with_neutral_merchant_name(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            storage = Storage(f"{tmpdir}/app.db")
+            user_id = storage.create_user("person@example.com", "secret123")
+            storage.add_transactions(
+                user_id,
+                [
+                    {
+                        "date": "2026-03-03",
+                        "description": "AT&T Mobility",
+                        "amount": 95.0,
+                        "category": "Phone",
+                        "source": "statement",
+                    },
+                    {
+                        "date": "2026-04-03",
+                        "description": "AT&T Mobility",
+                        "amount": 95.0,
+                        "category": "Phone",
+                        "source": "statement",
+                    },
+                    {
+                        "date": "2026-03-07",
+                        "description": "Spotify",
+                        "amount": 11.99,
+                        "category": "Subscriptions",
+                        "source": "statement",
+                    },
+                    {
+                        "date": "2026-04-07",
+                        "description": "Spotify",
+                        "amount": 11.99,
+                        "category": "Subscriptions",
+                        "source": "statement",
+                    },
+                    {
+                        "date": "2026-04-10",
+                        "description": "Dining Out",
+                        "amount": 140.0,
+                        "category": "Dining",
+                        "source": "statement",
+                    },
+                ],
+            )
+            storage.upsert_financial_profile(
+                user_id,
+                monthly_income=4100,
+                fixed_expenses=2300,
+                budgeting_goal="",
+                goal_name="Trip",
+                goal_target_amount=1800,
+                goal_target_date="2026-11-01",
+                current_saved_amount=350,
+            )
+            storage.save_monthly_summary(
+                user_id,
+                month_key="2026-04",
+                income=4100,
+                fixed_expenses=2300,
+                tracked_spending=246.99,
+                recurring_monthly_total=106.99,
+                leftover_money=1553.01,
+                discretionary_remaining=1553.01,
+                summary_text="",
+            )
+
+            dashboard = storage.get_dashboard_data(user_id, "2026-04")
+
+            moderate = dashboard["scenario_analysis"][1]
+            aggressive = dashboard["scenario_analysis"][2]
+            self.assertFalse(any("mobility" in action.lower() for action in moderate["actions"] + aggressive["actions"]))
+            self.assertFalse(any("at&t" in action.lower() for action in moderate["actions"] + aggressive["actions"]))
+            self.assertTrue(any("spotify" in action.lower() for action in moderate["actions"] + aggressive["actions"]))
+
+    def test_dashboard_scenarios_can_use_recurring_health_membership(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            storage = Storage(f"{tmpdir}/app.db")
+            user_id = storage.create_user("person@example.com", "secret123")
+            storage.add_transactions(
+                user_id,
+                [
+                    {
+                        "date": "2026-03-06",
+                        "description": "Club Pilates",
+                        "amount": 89.0,
+                        "category": "Health",
+                        "source": "statement",
+                    },
+                    {
+                        "date": "2026-04-06",
+                        "description": "Club Pilates",
+                        "amount": 89.0,
+                        "category": "Health",
+                        "source": "statement",
+                    },
+                    {
+                        "date": "2026-04-10",
+                        "description": "Dining Out",
+                        "amount": 180.0,
+                        "category": "Dining",
+                        "source": "statement",
+                    },
+                ],
+            )
+            storage.upsert_financial_profile(
+                user_id,
+                monthly_income=3900,
+                fixed_expenses=2200,
+                budgeting_goal="",
+                goal_name="Trip",
+                goal_target_amount=1800,
+                goal_target_date="2026-11-01",
+                current_saved_amount=300,
+            )
+            storage.save_monthly_summary(
+                user_id,
+                month_key="2026-04",
+                income=3900,
+                fixed_expenses=2200,
+                tracked_spending=269.0,
+                recurring_monthly_total=89.0,
+                leftover_money=1431.0,
+                discretionary_remaining=1431.0,
+                summary_text="",
+            )
+
+            dashboard = storage.get_dashboard_data(user_id, "2026-04")
+
+            moderate = dashboard["scenario_analysis"][1]
+            aggressive = dashboard["scenario_analysis"][2]
+            self.assertTrue(any("pilates" in action.lower() for action in moderate["actions"] + aggressive["actions"]))
+
+    def test_dashboard_scenarios_can_use_fitness_membership_with_blocked_substring_in_name(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            storage = Storage(f"{tmpdir}/app.db")
+            user_id = storage.create_user("person@example.com", "secret123")
+            storage.add_transactions(
+                user_id,
+                [
+                    {
+                        "date": "2026-03-06",
+                        "description": "Las Vegas Athletic Club",
+                        "amount": 79.0,
+                        "category": "Fitness",
+                        "source": "statement",
+                    },
+                    {
+                        "date": "2026-04-06",
+                        "description": "Las Vegas Athletic Club",
+                        "amount": 79.0,
+                        "category": "Fitness",
+                        "source": "statement",
+                    },
+                    {
+                        "date": "2026-04-10",
+                        "description": "Dining Out",
+                        "amount": 160.0,
+                        "category": "Dining",
+                        "source": "statement",
+                    },
+                ],
+            )
+            storage.upsert_financial_profile(
+                user_id,
+                monthly_income=3900,
+                fixed_expenses=2200,
+                budgeting_goal="",
+                goal_name="Trip",
+                goal_target_amount=1800,
+                goal_target_date="2026-11-01",
+                current_saved_amount=300,
+            )
+            storage.save_monthly_summary(
+                user_id,
+                month_key="2026-04",
+                income=3900,
+                fixed_expenses=2200,
+                tracked_spending=239.0,
+                recurring_monthly_total=79.0,
+                leftover_money=1461.0,
+                discretionary_remaining=1461.0,
+                summary_text="",
+            )
+
+            dashboard = storage.get_dashboard_data(user_id, "2026-04")
+
+            moderate = dashboard["scenario_analysis"][1]
+            aggressive = dashboard["scenario_analysis"][2]
+            self.assertTrue(
+                any("las vegas athletic club" in action.lower() for action in moderate["actions"] + aggressive["actions"])
+            )
+
+    def test_dashboard_scenarios_can_use_active_recurring_subscription_before_current_month_charge_posts(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            storage = Storage(f"{tmpdir}/app.db")
+            user_id = storage.create_user("person@example.com", "secret123")
+            storage.add_transactions(
+                user_id,
+                [
+                    {
+                        "date": "2026-02-05",
+                        "description": "Netflix",
+                        "amount": 15.99,
+                        "category": "Subscriptions",
+                        "source": "statement",
+                    },
+                    {
+                        "date": "2026-03-05",
+                        "description": "Netflix",
+                        "amount": 15.99,
+                        "category": "Subscriptions",
+                        "source": "statement",
+                    },
+                    {
+                        "date": "2026-04-08",
+                        "description": "Dining Out",
+                        "amount": 210.0,
+                        "category": "Dining",
+                        "source": "statement",
+                    },
+                ],
+            )
+            storage.upsert_financial_profile(
+                user_id,
+                monthly_income=3900,
+                fixed_expenses=2200,
+                budgeting_goal="",
+                goal_name="Trip",
+                goal_target_amount=1800,
+                goal_target_date="2026-11-01",
+                current_saved_amount=300,
+            )
+            storage.save_monthly_summary(
+                user_id,
+                month_key="2026-04",
+                income=3900,
+                fixed_expenses=2200,
+                tracked_spending=210.0,
+                recurring_monthly_total=15.99,
+                leftover_money=1490.0,
+                discretionary_remaining=1490.0,
+                summary_text="",
+            )
+
+            dashboard = storage.get_dashboard_data(user_id, "2026-04")
+
+            moderate = dashboard["scenario_analysis"][1]
+            aggressive = dashboard["scenario_analysis"][2]
+            self.assertTrue(any("netflix" in action.lower() for action in moderate["actions"] + aggressive["actions"]))
+
+    def test_dashboard_scenarios_do_not_treat_recurring_pharmacy_as_discretionary_subscription_cut(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            storage = Storage(f"{tmpdir}/app.db")
+            user_id = storage.create_user("person@example.com", "secret123")
+            storage.add_transactions(
+                user_id,
+                [
+                    {
+                        "date": "2026-03-06",
+                        "description": "CVS Pharmacy",
+                        "amount": 42.0,
+                        "category": "Health",
+                        "source": "statement",
+                    },
+                    {
+                        "date": "2026-04-06",
+                        "description": "CVS Pharmacy",
+                        "amount": 42.0,
+                        "category": "Health",
+                        "source": "statement",
+                    },
+                    {
+                        "date": "2026-04-10",
+                        "description": "Dining Out",
+                        "amount": 180.0,
+                        "category": "Dining",
+                        "source": "statement",
+                    },
+                ],
+            )
+            storage.upsert_financial_profile(
+                user_id,
+                monthly_income=3900,
+                fixed_expenses=2200,
+                budgeting_goal="",
+                goal_name="Trip",
+                goal_target_amount=1800,
+                goal_target_date="2026-11-01",
+                current_saved_amount=300,
+            )
+            storage.save_monthly_summary(
+                user_id,
+                month_key="2026-04",
+                income=3900,
+                fixed_expenses=2200,
+                tracked_spending=222.0,
+                recurring_monthly_total=42.0,
+                leftover_money=1478.0,
+                discretionary_remaining=1478.0,
+                summary_text="",
+            )
+
+            dashboard = storage.get_dashboard_data(user_id, "2026-04")
+
+            moderate = dashboard["scenario_analysis"][1]
+            aggressive = dashboard["scenario_analysis"][2]
+            self.assertFalse(any("cvs" in action.lower() for action in moderate["actions"] + aggressive["actions"]))
+            self.assertFalse(any("pharmacy" in action.lower() for action in moderate["actions"] + aggressive["actions"]))
+
+    def test_dashboard_scenarios_recurring_only_month_avoids_generic_category_trim_actions(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            storage = Storage(f"{tmpdir}/app.db")
+            user_id = storage.create_user("person@example.com", "secret123")
+            storage.add_transactions(
+                user_id,
+                [
+                    {
+                        "date": "2026-03-05",
+                        "description": "Netflix",
+                        "amount": 15.99,
+                        "category": "Subscriptions",
+                        "source": "statement",
+                    },
+                    {
+                        "date": "2026-04-05",
+                        "description": "Netflix",
+                        "amount": 15.99,
+                        "category": "Subscriptions",
+                        "source": "statement",
+                    },
+                ],
+            )
+            storage.upsert_financial_profile(
+                user_id,
+                monthly_income=3200,
+                fixed_expenses=1900,
+                budgeting_goal="",
+                goal_name="Buffer",
+                goal_target_amount=1000,
+                goal_target_date="2026-09-01",
+                current_saved_amount=200,
+            )
+            storage.save_monthly_summary(
+                user_id,
+                month_key="2026-04",
+                income=3200,
+                fixed_expenses=1900,
+                tracked_spending=15.99,
+                recurring_monthly_total=15.99,
+                leftover_money=1284.01,
+                discretionary_remaining=1284.01,
+                summary_text="",
+            )
+
+            dashboard = storage.get_dashboard_data(user_id, "2026-04")
+
+            moderate = dashboard["scenario_analysis"][1]
+            aggressive = dashboard["scenario_analysis"][2]
+            self.assertFalse(any("trim one discretionary category" in action.lower() for action in moderate["actions"]))
+            self.assertFalse(any("cut back across one or two discretionary categories" in action.lower() for action in aggressive["actions"]))
+            self.assertTrue(any("netflix" in action.lower() for action in moderate["actions"] + aggressive["actions"]))
+
+    def test_dashboard_scenarios_do_not_double_count_recurring_entertainment_inside_category_cut(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            storage = Storage(f"{tmpdir}/app.db")
+            user_id = storage.create_user("person@example.com", "secret123")
+            storage.add_transactions(
+                user_id,
+                [
+                    {
+                        "date": "2026-03-05",
+                        "description": "Netflix",
+                        "amount": 25.0,
+                        "category": "Entertainment",
+                        "source": "statement",
+                    },
+                    {
+                        "date": "2026-04-05",
+                        "description": "Netflix",
+                        "amount": 25.0,
+                        "category": "Entertainment",
+                        "source": "statement",
+                    },
+                    {
+                        "date": "2026-04-09",
+                        "description": "Movie Night",
+                        "amount": 75.0,
+                        "category": "Entertainment",
+                        "source": "statement",
+                    },
+                    {
+                        "date": "2026-04-12",
+                        "description": "Dining Out",
+                        "amount": 180.0,
+                        "category": "Dining",
+                        "source": "statement",
+                    },
+                ],
+            )
+            storage.upsert_financial_profile(
+                user_id,
+                monthly_income=4000,
+                fixed_expenses=2200,
+                budgeting_goal="",
+                goal_name="Buffer",
+                goal_target_amount=1500,
+                goal_target_date="2026-11-01",
+                current_saved_amount=300,
+            )
+            storage.save_monthly_summary(
+                user_id,
+                month_key="2026-04",
+                income=4000,
+                fixed_expenses=2200,
+                tracked_spending=280.0,
+                recurring_monthly_total=25.0,
+                leftover_money=1520.0,
+                discretionary_remaining=1520.0,
+                summary_text="",
+            )
+
+            dashboard = storage.get_dashboard_data(user_id, "2026-04")
+
+            moderate = dashboard["scenario_analysis"][1]
+            aggressive = dashboard["scenario_analysis"][2]
+            self.assertTrue(any("netflix" in action.lower() for action in moderate["actions"] + aggressive["actions"]))
+            self.assertLessEqual(moderate["savings_impact_monthly"], 25.0 + round((180.0 * 0.18), 2))
+            self.assertLessEqual(
+                aggressive["savings_impact_monthly"],
+                25.0 + round((180.0 * 0.35), 2) + round((75.0 * 0.30), 2),
+            )
+
+    def test_dashboard_scenarios_do_not_emit_zero_dollar_category_cut_after_overlap_netting(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            storage = Storage(f"{tmpdir}/app.db")
+            user_id = storage.create_user("person@example.com", "secret123")
+            storage.add_transactions(
+                user_id,
+                [
+                    {
+                        "date": "2026-03-05",
+                        "description": "Netflix",
+                        "amount": 25.0,
+                        "category": "Entertainment",
+                        "source": "statement",
+                    },
+                    {
+                        "date": "2026-04-05",
+                        "description": "Netflix",
+                        "amount": 25.0,
+                        "category": "Entertainment",
+                        "source": "statement",
+                    },
+                    {
+                        "date": "2026-04-12",
+                        "description": "Dining Out",
+                        "amount": 180.0,
+                        "category": "Dining",
+                        "source": "statement",
+                    },
+                ],
+            )
+            storage.upsert_financial_profile(
+                user_id,
+                monthly_income=4000,
+                fixed_expenses=2200,
+                budgeting_goal="",
+                goal_name="Buffer",
+                goal_target_amount=1500,
+                goal_target_date="2026-11-01",
+                current_saved_amount=300,
+            )
+            storage.save_monthly_summary(
+                user_id,
+                month_key="2026-04",
+                income=4000,
+                fixed_expenses=2200,
+                tracked_spending=205.0,
+                recurring_monthly_total=25.0,
+                leftover_money=1595.0,
+                discretionary_remaining=1595.0,
+                summary_text="",
+            )
+
+            dashboard = storage.get_dashboard_data(user_id, "2026-04")
+
+            moderate = dashboard["scenario_analysis"][1]
+            aggressive = dashboard["scenario_analysis"][2]
+            self.assertFalse(any("$0.00/month" in action for action in moderate["actions"]))
+            self.assertFalse(any("$0.00/month" in action for action in aggressive["actions"]))
+            self.assertFalse(
+                any("entertainment by about 18%" in action.lower() for action in moderate["actions"])
+            )
+            self.assertFalse(
+                any("entertainment by about 35%" in action.lower() for action in aggressive["actions"])
+            )
+
+    def test_dashboard_stay_on_current_path_prefers_top_discretionary_category_over_fixed_category(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            storage = Storage(f"{tmpdir}/app.db")
+            user_id = storage.create_user("person@example.com", "secret123")
+            storage.add_transactions(
+                user_id,
+                [
+                    {
+                        "date": "2026-04-01",
+                        "description": "Rent",
+                        "amount": 1600.0,
+                        "category": "Housing",
+                        "source": "statement",
+                    },
+                    {
+                        "date": "2026-04-05",
+                        "description": "Dining Out",
+                        "amount": 220.0,
+                        "category": "Dining",
+                        "source": "statement",
+                    },
+                    {
+                        "date": "2026-04-08",
+                        "description": "Netflix",
+                        "amount": 18.99,
+                        "category": "Subscriptions",
+                        "source": "statement",
+                    },
+                ],
+            )
+            storage.upsert_financial_profile(
+                user_id,
+                monthly_income=4500,
+                fixed_expenses=2000,
+                budgeting_goal="",
+                goal_name="Travel",
+                goal_target_amount=1800,
+                goal_target_date="2026-11-01",
+                current_saved_amount=200,
+            )
+            storage.save_monthly_summary(
+                user_id,
+                month_key="2026-04",
+                income=4500,
+                fixed_expenses=2000,
+                tracked_spending=1838.99,
+                recurring_monthly_total=18.99,
+                leftover_money=661.01,
+                discretionary_remaining=661.01,
+                summary_text="",
+            )
+
+            dashboard = storage.get_dashboard_data(user_id, "2026-04")
+
+            stay = dashboard["scenario_analysis"][0]
+            self.assertTrue(any("dining" in action.lower() for action in stay["actions"]))
+            self.assertFalse(any("housing" in action.lower() for action in stay["actions"]))
+
     def test_dashboard_long_dated_goal_is_not_marked_behind(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             storage = Storage(f"{tmpdir}/app.db")

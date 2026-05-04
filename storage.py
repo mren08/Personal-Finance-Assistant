@@ -1509,6 +1509,15 @@ class Storage:
                 monthly_summary=monthly_summary,
                 financial_profile=financial_profile,
             ),
+            "scenario_analysis": self._scenario_analysis(
+                category_breakdown=category_breakdown,
+                recurring_expenses=recurring_expenses,
+                monthly_summary=monthly_summary,
+                financial_profile=financial_profile,
+                selected_month_spend=total_spent,
+                selected_month=selected_month,
+                selected_transactions=selected_transactions,
+            ),
             "pending_receipts": self.list_pending_receipt_extractions(user_id),
         }
 
@@ -2008,6 +2017,545 @@ class Storage:
             actions.append(f"Set weekly discretionary cap to ${int(weekly_cap)}/week.")
 
         return actions[:3]
+
+    @classmethod
+    def _top_discretionary_categories(
+        cls,
+        category_breakdown: list[dict[str, Any]],
+        limit: int,
+        exclude_categories: set[str] | None = None,
+    ) -> list[dict[str, Any]]:
+        excluded = {item.strip().lower() for item in (exclude_categories or set())}
+        discretionary = [
+            item
+            for item in category_breakdown
+            if cls._is_discretionary_category(str(item.get("category") or ""))
+            and str(item.get("category") or "").strip().lower() not in excluded
+        ]
+        overspent = [item for item in discretionary if bool(item.get("overspending"))]
+        ranked: list[dict[str, Any]] = []
+        seen_categories: set[str] = set()
+        for item in [*overspent, *discretionary]:
+            category = str(item.get("category") or "").strip().lower()
+            if category in seen_categories:
+                continue
+            ranked.append(item)
+            seen_categories.add(category)
+            if len(ranked) >= limit:
+                break
+        return ranked
+
+    @staticmethod
+    def _subscription_cut_candidates(recurring_expenses: list[dict[str, Any]], limit: int) -> list[dict[str, Any]]:
+        if not recurring_expenses:
+            return []
+
+        ranked = sorted(
+            recurring_expenses,
+            key=lambda item: (
+                0 if item.get("recommended_to_cancel") else 1,
+                -float(item.get("monthly_equivalent") or 0),
+                str(item.get("merchant") or item.get("description") or ""),
+            ),
+        )
+        return ranked[:limit]
+
+    @staticmethod
+    def _is_discretionary_recurring_candidate(item: dict[str, Any]) -> bool:
+        category = str(item.get("category") or "").strip().lower()
+        merchant = str(item.get("merchant") or item.get("description") or "").strip().lower()
+        blocked_categories = {
+            "phone",
+            "internet",
+            "utilities",
+            "utility",
+            "insurance",
+            "loan payments",
+            "loan payment",
+            "loans",
+            "loan",
+        }
+        blocked_terms = {
+            "phone",
+            "wireless",
+            "internet",
+            "utility",
+            "utilities",
+            "insurance",
+            "electric",
+            "water",
+            "gas",
+            "rent",
+            "mortgage",
+        }
+        health_blocked_terms = {
+            "pharmacy",
+            "cvs",
+            "walgreens",
+            "rite aid",
+            "hospital",
+            "clinic",
+            "medical",
+            "doctor",
+            "rx",
+            "prescription",
+            "urgent care",
+        }
+        health_membership_terms = {
+            "gym",
+            "fitness",
+            "pilates",
+            "yoga",
+            "club",
+            "membership",
+            "wellness",
+            "barre",
+            "crossfit",
+            "spin",
+        }
+        if category in blocked_categories:
+            return False
+        if Storage._merchant_matches_blocked_term(merchant, blocked_terms):
+            return False
+
+        discretionary_style_categories = {
+            "subscriptions",
+            "entertainment",
+            "wellness",
+            "fitness",
+            "health",
+            "streaming",
+        }
+        if category == "health":
+            if Storage._merchant_matches_blocked_term(merchant, health_blocked_terms):
+                return False
+            return Storage._merchant_matches_blocked_term(merchant, health_membership_terms)
+
+        return bool(item.get("recommended_to_cancel")) or category in discretionary_style_categories
+
+    @staticmethod
+    def _merchant_matches_blocked_term(merchant: str, terms: set[str]) -> bool:
+        merchant_tokens = re.findall(r"[a-z0-9]+", merchant.lower())
+        if not merchant_tokens:
+            return False
+        joined_tokens = " ".join(merchant_tokens)
+        for term in terms:
+            term_tokens = re.findall(r"[a-z0-9]+", term.lower())
+            if not term_tokens:
+                continue
+            if len(term_tokens) == 1:
+                if term_tokens[0] in merchant_tokens:
+                    return True
+                continue
+            phrase = " ".join(term_tokens)
+            if phrase in joined_tokens:
+                return True
+        return False
+
+    @staticmethod
+    def _recurring_item_matches_selected_month(item: dict[str, Any], selected_month: str) -> bool:
+        last_seen_raw = str(item.get("last_seen") or "").strip()
+        if not last_seen_raw:
+            return False
+        try:
+            month_start = datetime.strptime(f"{selected_month}-01", "%Y-%m-%d").date()
+            last_seen = datetime.strptime(last_seen_raw, "%Y-%m-%d").date()
+        except ValueError:
+            return False
+
+        year = month_start.year + (1 if month_start.month == 12 else 0)
+        month = 1 if month_start.month == 12 else month_start.month + 1
+        next_month_start = month_start.replace(year=year, month=month)
+        if month_start <= last_seen < next_month_start:
+            return True
+
+        frequency = str(item.get("frequency") or "").strip().lower()
+        grace_days = {
+            "weekly": 14,
+            "monthly": 35,
+            "quarterly": 100,
+            "annual": 370,
+        }.get(frequency, 0)
+        return grace_days > 0 and 0 < (month_start - last_seen).days <= grace_days
+
+    @staticmethod
+    def _scenario_recurring_expenses(
+        recurring_expenses: list[dict[str, Any]],
+        selected_month: str | None,
+    ) -> list[dict[str, Any]]:
+        if not selected_month:
+            return []
+
+        filtered: list[dict[str, Any]] = []
+        for item in recurring_expenses:
+            if not Storage._recurring_item_matches_selected_month(item, selected_month):
+                continue
+            if not Storage._is_discretionary_recurring_candidate(item):
+                continue
+            filtered.append(item)
+        return filtered
+
+    @staticmethod
+    def _category_cut_savings(
+        category_item: dict[str, Any],
+        rate: float,
+        recurring_candidates: list[dict[str, Any]],
+    ) -> float:
+        category_name = str(category_item.get("category") or "").strip().lower()
+        category_amount = float(category_item.get("amount") or 0)
+        overlapping_recurring_total = round(
+            sum(
+                float(item.get("monthly_equivalent") or 0)
+                for item in recurring_candidates
+                if str(item.get("category") or "").strip().lower() == category_name
+            ),
+            2,
+        )
+        effective_base = max(0.0, category_amount - overlapping_recurring_total)
+        return round(effective_base * rate, 2)
+
+    @staticmethod
+    def _scenario_baseline_room(
+        monthly_summary: dict[str, Any] | None,
+        financial_profile: dict[str, Any] | None,
+        selected_month_spend: float,
+    ) -> float | None:
+        if monthly_summary:
+            if monthly_summary.get("discretionary_remaining") not in (None, ""):
+                return round(float(monthly_summary.get("discretionary_remaining") or 0), 2)
+            if monthly_summary.get("leftover_money") not in (None, ""):
+                return round(float(monthly_summary.get("leftover_money") or 0), 2)
+
+        if financial_profile:
+            monthly_income = float(financial_profile.get("monthly_income") or 0)
+            fixed_expenses = float(financial_profile.get("fixed_expenses") or 0)
+            if monthly_income > 0:
+                return round(monthly_income - fixed_expenses - selected_month_spend, 2)
+        return None
+
+    @staticmethod
+    def _scenario_month_end_text(projected_room: float | None) -> str:
+        if projected_room is None:
+            return "Month-end room could become clearer once more current-month data is available."
+        if projected_room < 0:
+            return f"This may still leave an estimated ${abs(projected_room):,.2f} monthly gap."
+        if projected_room == 0:
+            return "This may leave you close to break-even by month end."
+        return f"This could leave about ${projected_room:,.2f} of monthly room by month end."
+
+    @staticmethod
+    def _goal_progress_metrics(
+        financial_profile: dict[str, Any] | None,
+        selected_month: str | None,
+    ) -> dict[str, Any]:
+        if not financial_profile:
+            return {"goal_name": "", "remaining_goal": 0.0, "months_remaining": None}
+
+        goal_name = str(financial_profile.get("goal_name") or "").strip()
+        goal_target_amount = float(financial_profile.get("goal_target_amount") or 0)
+        current_saved_amount = float(financial_profile.get("current_saved_amount") or 0)
+        goal_target_date = str(financial_profile.get("goal_target_date") or "").strip()
+        remaining_goal = max(0.0, goal_target_amount - current_saved_amount)
+        months_remaining = None
+
+        if selected_month and goal_target_date:
+            try:
+                start_date = datetime.strptime(f"{selected_month}-01", "%Y-%m-%d").date()
+                target_date = datetime.strptime(goal_target_date, "%Y-%m-%d").date()
+            except ValueError:
+                months_remaining = None
+            else:
+                if target_date > start_date:
+                    months_remaining = max((target_date - start_date).days / 30.4375, 0.1)
+
+        return {
+            "goal_name": goal_name,
+            "remaining_goal": round(remaining_goal, 2),
+            "months_remaining": months_remaining,
+        }
+
+    @classmethod
+    def _scenario_goal_impact_text(
+        cls,
+        monthly_savings: float,
+        baseline_room: float | None,
+        financial_profile: dict[str, Any] | None,
+        selected_month: str | None,
+    ) -> str:
+        projected_room = baseline_room + monthly_savings if baseline_room is not None else None
+        goal_metrics = cls._goal_progress_metrics(financial_profile, selected_month)
+        goal_name = goal_metrics["goal_name"]
+        remaining_goal = float(goal_metrics["remaining_goal"] or 0)
+        months_remaining = goal_metrics["months_remaining"]
+
+        if goal_name and remaining_goal > 0:
+            if projected_room is None:
+                return f"This could give you a clearer estimate for {goal_name} once more month data is available."
+            if months_remaining and months_remaining > 0:
+                required_monthly = remaining_goal / months_remaining
+                if projected_room >= required_monthly:
+                    return (
+                        f"This may keep you closer to the pace needed for {goal_name}, "
+                        f"with about ${projected_room:,.2f}/month available versus an estimated ${required_monthly:,.2f} pace."
+                    )
+                return (
+                    f"This may improve progress toward {goal_name}, "
+                    f"but it could still leave you short of the estimated ${required_monthly:,.2f}/month pace."
+                )
+            return f"This could free up about ${max(projected_room, 0):,.2f}/month for {goal_name}."
+
+        month_end_text = cls._scenario_month_end_text(projected_room)
+        if monthly_savings <= 0:
+            return f"Staying with this setup may keep your current month-end position unchanged. {month_end_text}"
+        return f"This could improve your month-end cushion by about ${monthly_savings:,.2f}. {month_end_text}"
+
+    @staticmethod
+    def _fallback_scenario_card(title: str, scenario_key: str, chat_prompt: str) -> dict[str, Any]:
+        return {
+            "title": title,
+            "savings_impact_monthly": 0,
+            "actions": [
+                "Upload more transaction history to generate stronger scenario recommendations.",
+                "Upload more transaction history for at least one full month so category and subscription patterns are clearer.",
+            ],
+            "goal_impact": "This could become more specific once more transaction history is uploaded.",
+            "tradeoff": "Upload more transaction history to generate stronger scenario recommendations.",
+            "why_this": "Based on your uploaded transactions, budget caps, recurring subscriptions, and savings goal.",
+            "chat_prompt": chat_prompt,
+            "cta_label": "Ask AI to build this plan",
+            "scenario_key": scenario_key,
+        }
+
+    @classmethod
+    def _insufficient_scenario_data(
+        cls,
+        category_breakdown: list[dict[str, Any]],
+        recurring_expenses: list[dict[str, Any]],
+        monthly_summary: dict[str, Any] | None,
+        financial_profile: dict[str, Any] | None,
+        selected_month: str | None,
+        selected_transactions: list[dict[str, Any]],
+    ) -> bool:
+        if not selected_month:
+            return True
+
+        discretionary_transactions = [
+            transaction
+            for transaction in selected_transactions
+            if cls._is_discretionary_category(str(transaction.get("category") or ""))
+        ]
+        has_discretionary_categories = bool(discretionary_transactions)
+        has_recurring_evidence = bool(recurring_expenses)
+        discretionary_spend = round(
+            sum(float(transaction.get("amount") or 0) for transaction in discretionary_transactions),
+            2,
+        )
+
+        if not has_discretionary_categories and not has_recurring_evidence:
+            return True
+        if not has_recurring_evidence and len(selected_transactions) < 2:
+            return True
+        if not has_recurring_evidence and discretionary_spend < 20:
+            return True
+        return False
+
+    @staticmethod
+    def _scenario_weekly_cap_action(projected_room: float | None) -> str:
+        if projected_room is None:
+            return "Set a weekly check-in after more transaction history is uploaded so a realistic spending cap is easier to estimate."
+        weekly_cap = max(0, round(projected_room / 4 / 10) * 10)
+        return f"Set a weekly discretionary check-in around ${int(weekly_cap)}/week and adjust if spending drifts."
+
+    @staticmethod
+    def _combine_names(items: list[str]) -> str:
+        if not items:
+            return ""
+        if len(items) == 1:
+            return items[0]
+        if len(items) == 2:
+            return f"{items[0]} and {items[1]}"
+        return f"{', '.join(items[:-1])}, and {items[-1]}"
+
+    @classmethod
+    def _scenario_analysis(
+        cls,
+        category_breakdown: list[dict[str, Any]],
+        recurring_expenses: list[dict[str, Any]],
+        monthly_summary: dict[str, Any] | None,
+        financial_profile: dict[str, Any] | None,
+        selected_month_spend: float,
+        selected_month: str | None,
+        selected_transactions: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        titles = [
+            ("Stay on Current Path", "stay_on_current_path", "Help me review my current path using my current spending data."),
+            ("Moderate Adjustment", "moderate_adjustment", "Help me follow the Moderate Adjustment plan using my current spending data."),
+            ("Aggressive Savings", "aggressive_savings", "Help me follow the Aggressive Savings plan using my current spending data."),
+        ]
+        scenario_recurring_expenses = cls._scenario_recurring_expenses(recurring_expenses, selected_month)
+        if cls._insufficient_scenario_data(
+            category_breakdown,
+            scenario_recurring_expenses,
+            monthly_summary,
+            financial_profile,
+            selected_month,
+            selected_transactions,
+        ):
+            return [cls._fallback_scenario_card(title, key, prompt) for title, key, prompt in titles]
+
+        baseline_room = cls._scenario_baseline_room(monthly_summary, financial_profile, selected_month_spend)
+        exclude_subscription_category = {"subscriptions"} if scenario_recurring_expenses else set()
+        top_one = cls._top_discretionary_categories(
+            category_breakdown,
+            limit=1,
+            exclude_categories=exclude_subscription_category,
+        )
+        top_two = cls._top_discretionary_categories(
+            category_breakdown,
+            limit=2,
+            exclude_categories=exclude_subscription_category,
+        )
+        one_subscription = cls._subscription_cut_candidates(scenario_recurring_expenses, limit=1)
+        two_subscriptions = cls._subscription_cut_candidates(scenario_recurring_expenses, limit=2)
+
+        top_discretionary_category = cls._top_discretionary_category(category_breakdown)
+        top_category_name = str((top_discretionary_category or {}).get("category") or "").strip()
+        stay_actions = [
+            "Keep your current path for now and monitor the current month-end "
+            + ("surplus." if (baseline_room or 0) >= 0 else "gap."),
+            (
+                f"Check {top_category_name} spending once a week to see whether it keeps tracking near this month's pace."
+                if top_category_name
+                else "Check your largest discretionary category once a week to see whether it stays near this month's pace."
+            ),
+        ]
+        if scenario_recurring_expenses:
+            stay_actions.append("Review subscriptions before renewal so any future pause is easier if cash flow tightens.")
+        month_end_note = cls._scenario_month_end_text(baseline_room)
+        stay_tradeoff = "No spending changes, so your current month-end surplus or gap may stay close to where it is now."
+        if monthly_summary:
+            stay_tradeoff = f"No spending changes, so {month_end_note.lower()}"
+
+        moderate_actions: list[str] = []
+        moderate_savings = 0.0
+        if top_one:
+            top_category = top_one[0]
+            cut_amount = cls._category_cut_savings(top_category, 0.18, one_subscription)
+            if cut_amount > 0:
+                moderate_savings += cut_amount
+                moderate_actions.append(
+                    f"Reduce {top_category.get('category')} by about 18% (roughly ${cut_amount:,.2f}/month)."
+                )
+        if not moderate_actions:
+            if one_subscription:
+                moderate_actions.append(
+                    "Keep other discretionary spending flat while you test whether one subscription pause creates enough room."
+                )
+            else:
+                moderate_actions.append("Trim one discretionary category by about 15-20% if current spending stays elevated.")
+        if one_subscription:
+            sub = one_subscription[0]
+            sub_savings = round(float(sub.get("monthly_equivalent") or 0), 2)
+            moderate_savings += sub_savings
+            merchant = str(sub.get("merchant") or sub.get("description") or "one low-priority subscription")
+            moderate_actions.append(f"Pause {merchant} for now (about ${sub_savings:,.2f}/month).")
+        else:
+            moderate_actions.append("Review one lower-priority subscription or recurring charge for a pause.")
+        moderate_actions.append(
+            cls._scenario_weekly_cap_action(
+                baseline_room + round(moderate_savings, 2) if baseline_room is not None else None
+            )
+        )
+
+        aggressive_actions: list[str] = []
+        aggressive_savings = 0.0
+        reduction_rates = [0.35, 0.30]
+        if top_two:
+            category_parts: list[str] = []
+            for index, category in enumerate(top_two):
+                rate = reduction_rates[index] if index < len(reduction_rates) else 0.25
+                cut_amount = cls._category_cut_savings(category, rate, two_subscriptions)
+                if cut_amount <= 0:
+                    continue
+                aggressive_savings += cut_amount
+                category_parts.append(
+                    f"{category.get('category')} by about {int(rate * 100)}% (roughly ${cut_amount:,.2f}/month)"
+                )
+            if category_parts:
+                aggressive_actions.append(f"Reduce {cls._combine_names(category_parts)}.")
+        if not aggressive_actions:
+            if two_subscriptions:
+                aggressive_actions.append(
+                    "Keep other discretionary spending flat while you focus on the larger recurring subscription cuts available this month."
+                )
+            else:
+                aggressive_actions.append("Cut back across one or two discretionary categories by about 25-40% if needed.")
+        if two_subscriptions:
+            subscription_names: list[str] = []
+            subscription_savings = 0.0
+            for sub in two_subscriptions:
+                sub_savings = round(float(sub.get("monthly_equivalent") or 0), 2)
+                subscription_savings += sub_savings
+                merchant = str(sub.get("merchant") or sub.get("description") or "a recurring charge")
+                subscription_names.append(f"{merchant} (${sub_savings:,.2f}/month)")
+            aggressive_savings += subscription_savings
+            aggressive_actions.append(
+                f"Cancel or pause {cls._combine_names(subscription_names)}."
+            )
+        else:
+            aggressive_actions.append("Review up to two subscriptions or recurring charges for cancellation or a pause.")
+        aggressive_actions.append(
+            cls._scenario_weekly_cap_action(
+                baseline_room + round(aggressive_savings, 2) if baseline_room is not None else None
+            )
+        )
+
+        why_this = "Based on your uploaded transactions, budget caps, recurring subscriptions, and savings goal."
+        return [
+            {
+                "title": "Stay on Current Path",
+                "savings_impact_monthly": 0,
+                "actions": stay_actions[:3],
+                "goal_impact": cls._scenario_goal_impact_text(0, baseline_room, financial_profile, selected_month),
+                "tradeoff": stay_tradeoff,
+                "why_this": why_this,
+                "chat_prompt": titles[0][2],
+                "cta_label": "Ask AI to build this plan",
+                "scenario_key": "stay_on_current_path",
+            },
+            {
+                "title": "Moderate Adjustment",
+                "savings_impact_monthly": round(moderate_savings, 2),
+                "actions": moderate_actions[:3],
+                "goal_impact": cls._scenario_goal_impact_text(
+                    round(moderate_savings, 2),
+                    baseline_room,
+                    financial_profile,
+                    selected_month,
+                ),
+                "tradeoff": "This may require a few smaller behavior changes, but it could avoid major lifestyle cuts.",
+                "why_this": why_this,
+                "chat_prompt": titles[1][2],
+                "cta_label": "Ask AI to build this plan",
+                "scenario_key": "moderate_adjustment",
+            },
+            {
+                "title": "Aggressive Savings",
+                "savings_impact_monthly": round(aggressive_savings, 2),
+                "actions": aggressive_actions[:3],
+                "goal_impact": cls._scenario_goal_impact_text(
+                    round(aggressive_savings, 2),
+                    baseline_room,
+                    financial_profile,
+                    selected_month,
+                ),
+                "tradeoff": "Could create the biggest savings, but may feel more restrictive month to month.",
+                "why_this": why_this,
+                "chat_prompt": titles[2][2],
+                "cta_label": "Ask AI to build this plan",
+                "scenario_key": "aggressive_savings",
+            },
+        ]
 
     def _behavioral_insights(
         self,
