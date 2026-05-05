@@ -770,6 +770,440 @@ class AppRouteTests(unittest.TestCase):
         self.assertEqual(payload["action"]["type"], "confirm_transaction_match")
         self.assertEqual(payload["profile"]["transaction_count"], 1)
 
+    def test_chat_route_adds_selected_scenario_to_agent_context(self):
+        self._signup_and_login()
+        self.client.post(
+            "/api/upload-statement",
+            data={"statement": (io.BytesIO(INSIGHTS_CSV.encode("utf-8")), "statement.csv")},
+            content_type="multipart/form-data",
+        )
+        self.client.post(
+            "/api/profile",
+            json={
+                "month": "2026-04",
+                "monthly_income": 1000,
+                "fixed_expenses": 300,
+                "goal_name": "Travel fund",
+                "goal_target_amount": 1000,
+                "goal_target_date": "2026-08-01",
+                "current_saved_amount": 250,
+            },
+        )
+
+        with patch("app.build_agent_service") as build_agent_service:
+            build_agent_service.return_value.run_chat_turn.return_value = {
+                "reply": "I can build that plan.",
+                "actions": [],
+            }
+
+            response = self.client.post(
+                "/api/chat",
+                json={
+                    "message": "Help me follow the Moderate Adjustment plan using my current spending data.",
+                    "month": "2026-04",
+                    "scenario_key": "moderate_adjustment",
+                },
+            )
+
+        payload = response.get_json()
+        self.assertEqual(response.status_code, 200)
+        _, kwargs = build_agent_service.return_value.run_chat_turn.call_args
+        selected_scenario = kwargs["agent_context"]["selected_scenario"]
+        self.assertEqual(selected_scenario["scenario_key"], "moderate_adjustment")
+        self.assertEqual(selected_scenario["title"], "Moderate Adjustment")
+        expected_scenario = next(
+            item for item in payload["profile"]["scenario_analysis"] if item["scenario_key"] == "moderate_adjustment"
+        )
+        self.assertEqual(selected_scenario["chat_prompt"], expected_scenario["chat_prompt"])
+
+    def test_chat_route_fallback_builds_selected_scenario_weekly_plan(self):
+        self._signup_and_login()
+        self.client.post(
+            "/api/upload-statement",
+            data={"statement": (io.BytesIO(INSIGHTS_CSV.encode("utf-8")), "statement.csv")},
+            content_type="multipart/form-data",
+        )
+        self.client.post(
+            "/api/profile",
+            json={
+                "month": "2026-04",
+                "monthly_income": 1000,
+                "fixed_expenses": 300,
+                "goal_name": "Travel fund",
+                "goal_target_amount": 1000,
+                "goal_target_date": "2026-08-01",
+                "current_saved_amount": 250,
+            },
+        )
+
+        with patch("app.build_agent_service") as build_agent_service:
+            build_agent_service.return_value.run_chat_turn.return_value = {
+                "reply": "I couldn't produce a reliable coaching response right now.",
+                "actions": [],
+            }
+
+            response = self.client.post(
+                "/api/chat",
+                json={
+                    "message": "Help me follow the Moderate Adjustment plan using my current spending data.",
+                    "month": "2026-04",
+                    "scenario_key": "moderate_adjustment",
+                },
+            )
+
+        payload = response.get_json()
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("Moderate Adjustment", payload["reply"])
+        self.assertIn("April 2026", payload["reply"])
+        self.assertIn("week", payload["reply"].lower())
+        self.assertIn("Dining", payload["reply"])
+        self.assertIn("pause", payload["reply"].lower())
+
+    def test_chat_route_fallback_builds_stay_on_current_path_reply_for_official_cta_prompt(self):
+        self._signup_and_login()
+        self.client.post(
+            "/api/upload-statement",
+            data={"statement": (io.BytesIO(INSIGHTS_CSV.encode("utf-8")), "statement.csv")},
+            content_type="multipart/form-data",
+        )
+        self.client.post(
+            "/api/profile",
+            json={
+                "month": "2026-04",
+                "monthly_income": 1000,
+                "fixed_expenses": 300,
+                "goal_name": "Travel fund",
+                "goal_target_amount": 1000,
+                "goal_target_date": "2026-08-01",
+                "current_saved_amount": 250,
+            },
+        )
+
+        with patch("app.build_agent_service") as build_agent_service:
+            build_agent_service.return_value.run_chat_turn.return_value = {
+                "reply": "I couldn't produce a reliable coaching response right now.",
+                "actions": [],
+            }
+
+            response = self.client.post(
+                "/api/chat",
+                json={
+                    "message": "Help me review my current path using my current spending data.",
+                    "month": "2026-04",
+                    "scenario_key": "stay_on_current_path",
+                },
+            )
+
+        payload = response.get_json()
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("Stay on Current Path", payload["reply"])
+        self.assertIn("April 2026", payload["reply"])
+        self.assertIn("week", payload["reply"].lower())
+
+    def test_chat_route_weekly_pacing_uses_selected_scenario_category_not_biggest_category(self):
+        self._signup_and_login()
+        scenario_csv = """Transaction Date,Description,Category,Amount
+02/02/2026,NETFLIX.COM,Subscriptions,-150.00
+03/02/2026,NETFLIX.COM,Subscriptions,-150.00
+04/02/2026,NETFLIX.COM,Subscriptions,-150.00
+04/06/2026,Restaurant Row,Dining,-100.00
+04/12/2026,Restaurant Row,Dining,-80.00
+"""
+        self.client.post(
+            "/api/upload-statement",
+            data={"statement": (io.BytesIO(scenario_csv.encode("utf-8")), "statement.csv")},
+            content_type="multipart/form-data",
+        )
+        self.client.post(
+            "/api/profile",
+            json={
+                "month": "2026-04",
+                "monthly_income": 1200,
+                "fixed_expenses": 300,
+                "goal_name": "Travel fund",
+                "goal_target_amount": 800,
+                "goal_target_date": "2026-08-01",
+                "current_saved_amount": 200,
+            },
+        )
+
+        with patch("app.build_agent_service") as build_agent_service:
+            build_agent_service.return_value.run_chat_turn.return_value = {
+                "reply": "I couldn't produce a reliable coaching response right now.",
+                "actions": [],
+            }
+
+            response = self.client.post(
+                "/api/chat",
+                json={
+                    "message": "Help me follow the Moderate Adjustment plan using my current spending data.",
+                    "month": "2026-04",
+                    "scenario_key": "moderate_adjustment",
+                },
+            )
+
+        payload = response.get_json()
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("Dining", payload["reply"])
+        self.assertIn("Weekly pacing: keep Dining", payload["reply"])
+        self.assertNotIn("Weekly pacing: keep Subscriptions", payload["reply"])
+
+    def test_chat_route_weekly_pacing_uses_netted_category_cut_when_subscription_overlaps_category(self):
+        self._signup_and_login()
+        overlap_csv = """Transaction Date,Description,Category,Amount
+03/05/2026,Netflix,Entertainment,-25.00
+04/05/2026,Netflix,Entertainment,-25.00
+04/12/2026,Movie Night,Entertainment,-100.00
+04/18/2026,Dining Out,Dining,-80.00
+"""
+        self.client.post(
+            "/api/upload-statement",
+            data={"statement": (io.BytesIO(overlap_csv.encode("utf-8")), "statement.csv")},
+            content_type="multipart/form-data",
+        )
+        self.client.post(
+            "/api/profile",
+            json={
+                "month": "2026-04",
+                "monthly_income": 1200,
+                "fixed_expenses": 300,
+                "goal_name": "Travel fund",
+                "goal_target_amount": 800,
+                "goal_target_date": "2026-08-01",
+                "current_saved_amount": 200,
+            },
+        )
+
+        with patch("app.build_agent_service") as build_agent_service:
+            build_agent_service.return_value.run_chat_turn.return_value = {
+                "reply": "I couldn't produce a reliable coaching response right now.",
+                "actions": [],
+            }
+
+            response = self.client.post(
+                "/api/chat",
+                json={
+                    "message": "Help me follow the Moderate Adjustment plan using my current spending data.",
+                    "month": "2026-04",
+                    "scenario_key": "moderate_adjustment",
+                },
+            )
+
+        payload = response.get_json()
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("Entertainment", payload["reply"])
+        self.assertIn("Weekly pacing: keep Entertainment near $26.75/week", payload["reply"])
+        self.assertNotIn("$25.62/week", payload["reply"])
+
+    def test_fallback_scenario_reply_parses_comma_formatted_monthly_cut_amount(self):
+        client = app_module._FallbackAgentClient()
+
+        result = client(
+            {
+                "message": "Help me follow the Moderate Adjustment plan using my current spending data.",
+                "context": {
+                    "selected_month_label": "April 2026",
+                    "monthly_summary": {"leftover_money": 900},
+                    "category_breakdown": [
+                        {"category": "Dining", "amount": 6000.0, "percentage": 55.0},
+                    ],
+                    "selected_scenario": {
+                        "title": "Moderate Adjustment",
+                        "scenario_key": "moderate_adjustment",
+                        "goal_impact": "This would create more room in the budget.",
+                        "actions": [
+                            "Reduce Dining by about 18% (roughly $1,234.56/month).",
+                            "Pause one lower-priority subscription.",
+                        ],
+                    },
+                },
+            }
+        )
+
+        self.assertIn("Weekly pacing: keep Dining near $1191.36/week", result["reply"])
+
+    def test_scenario_focus_category_prefers_action_text_over_narrative_mentions(self):
+        focus_category = app_module._scenario_focus_category(
+            [
+                {"category": "Travel", "amount": 500.0},
+                {"category": "Dining", "amount": 300.0},
+            ],
+            {
+                "title": "Moderate Adjustment",
+                "tradeoff": "Travel may still feel tight this month.",
+                "goal_impact": "This keeps the travel goal on track.",
+                "chat_prompt": "Help me protect my travel budget.",
+                "actions": [
+                    "Reduce Dining by about 18% (roughly $54.00/month).",
+                    "Pause one lower-priority subscription.",
+                ],
+            },
+        )
+
+        self.assertEqual(focus_category["category"], "Dining")
+
+    def test_scenario_action_monthly_cut_uses_amount_for_requested_category_in_combined_action(self):
+        amount = app_module._scenario_action_monthly_cut(
+            {
+                "actions": [
+                    "Reduce Shopping by about 35% (roughly $105.00/month) and Dining by about 30% (roughly $60.00/month)."
+                ]
+            },
+            "Dining",
+        )
+
+        self.assertEqual(amount, 60.0)
+
+    def test_chat_route_uses_selected_scenario_reply_when_scenario_key_is_present_and_message_drifts(self):
+        self._signup_and_login()
+        self.client.post(
+            "/api/upload-statement",
+            data={"statement": (io.BytesIO(INSIGHTS_CSV.encode("utf-8")), "statement.csv")},
+            content_type="multipart/form-data",
+        )
+        self.client.post(
+            "/api/profile",
+            json={
+                "month": "2026-04",
+                "monthly_income": 1000,
+                "fixed_expenses": 300,
+                "goal_name": "Travel fund",
+                "goal_target_amount": 1000,
+                "goal_target_date": "2026-08-01",
+                "current_saved_amount": 250,
+            },
+        )
+
+        with patch("app.build_agent_service") as build_agent_service:
+            build_agent_service.return_value.run_chat_turn.return_value = {
+                "reply": "I couldn't produce a reliable coaching response right now.",
+                "actions": [],
+            }
+
+            response = self.client.post(
+                "/api/chat",
+                json={
+                    "message": "Can you turn this into a week-by-week checklist?",
+                    "month": "2026-04",
+                    "scenario_key": "moderate_adjustment",
+                },
+            )
+
+        payload = response.get_json()
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("Moderate Adjustment", payload["reply"])
+        self.assertIn("Action:", payload["reply"])
+
+    def test_chat_route_does_not_hijack_behavior_question_when_scenario_key_is_present(self):
+        self._signup_and_login()
+        self.client.post(
+            "/api/upload-statement",
+            data={"statement": (io.BytesIO(BEHAVIOR_CSV.encode("utf-8")), "statement.csv")},
+            content_type="multipart/form-data",
+        )
+        self.client.post(
+            "/api/profile",
+            json={
+                "month": "2026-04",
+                "monthly_income": 1000,
+                "fixed_expenses": 200,
+                "budgeting_goal": "Save 500 for travel",
+            },
+        )
+
+        with patch("app.build_agent_service") as build_agent_service:
+            build_agent_service.return_value.run_chat_turn.return_value = {
+                "reply": "I couldn't produce a reliable coaching response right now.",
+                "actions": [],
+            }
+
+            response = self.client.post(
+                "/api/chat",
+                json={
+                    "message": "what behavioral patterns do you see?",
+                    "month": "2026-04",
+                    "scenario_key": "moderate_adjustment",
+                },
+            )
+
+        payload = response.get_json()
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("Behavior patterns", payload["reply"])
+        self.assertNotIn("Moderate Adjustment", payload["reply"])
+
+    def test_chat_route_does_not_hijack_specific_subscription_question_when_scenario_key_is_present(self):
+        self._signup_and_login()
+        self.client.post(
+            "/api/upload-statement",
+            data={"statement": (io.BytesIO(INSIGHTS_CSV.encode("utf-8")), "statement.csv")},
+            content_type="multipart/form-data",
+        )
+        self.client.post(
+            "/api/profile",
+            json={
+                "month": "2026-04",
+                "monthly_income": 1000,
+                "fixed_expenses": 300,
+                "goal_name": "Travel fund",
+                "goal_target_amount": 1000,
+                "goal_target_date": "2026-08-01",
+                "current_saved_amount": 250,
+            },
+        )
+
+        with patch("app.build_agent_service") as build_agent_service:
+            build_agent_service.return_value.run_chat_turn.return_value = {
+                "reply": "I couldn't produce a reliable coaching response right now.",
+                "actions": [],
+            }
+
+            response = self.client.post(
+                "/api/chat",
+                json={
+                    "message": "Should I keep Netflix?",
+                    "month": "2026-04",
+                    "scenario_key": "moderate_adjustment",
+                },
+            )
+
+        payload = response.get_json()
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("Netflix", payload["reply"])
+        self.assertNotIn("Moderate Adjustment", payload["reply"])
+
+    def test_fallback_selected_scenario_does_not_override_specific_subscription_question(self):
+        client = app_module._FallbackAgentClient()
+
+        result = client(
+            {
+                "message": "Should I keep Netflix?",
+                "context": {
+                    "selected_month_label": "April 2026",
+                    "selected_scenario_explicit": True,
+                    "selected_scenario": {
+                        "title": "Moderate Adjustment",
+                        "scenario_key": "moderate_adjustment",
+                        "goal_impact": "This keeps the goal on track.",
+                        "actions": [
+                            "Reduce Dining by about 18% (roughly $54.00/month).",
+                            "Pause Netflix for now (about $15.49/month).",
+                        ],
+                    },
+                    "subscriptions": [
+                        {
+                            "merchant": "Netflix",
+                            "monthly_equivalent": 15.49,
+                            "category": "Subscriptions",
+                        }
+                    ],
+                    "monthly_summary": {"leftover_money": 250},
+                },
+            }
+        )
+
+        self.assertIn("Netflix", result["reply"])
+        self.assertNotIn("Moderate Adjustment", result["reply"])
+
     def test_profile_update_route_saves_income_fixed_expenses_and_structured_goal_fields(self):
         self._signup_and_login()
 

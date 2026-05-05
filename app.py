@@ -130,6 +130,9 @@ class _FallbackAgentClient:
         recurring_total = float(context.get("monthly_recurring_total") or 0)
         biggest = category_breakdown[0] if category_breakdown else None
         strongest_subscription = subscriptions[0] if subscriptions else None
+        selected_scenario = context.get("selected_scenario") or _resolve_selected_scenario(context, message=raw_message)
+        selected_scenario_explicit = bool(context.get("selected_scenario_explicit"))
+        scenario_focus_category = _scenario_focus_category(category_breakdown, selected_scenario)
         referenced_subscription = _resolve_referenced_subscription(message, context)
         city = _extract_city_from_conversation(raw_message, context)
         alternative_follow_up = _is_subscription_alternative_follow_up(raw_message, context)
@@ -143,6 +146,19 @@ class _FallbackAgentClient:
             reply = merchant_reply
         elif topic_reply:
             reply = topic_reply
+        elif selected_scenario and _should_use_selected_scenario_reply(
+            raw_message,
+            explicit_selected_scenario=selected_scenario_explicit,
+            referenced_subscription=referenced_subscription,
+            alternative_follow_up=alternative_follow_up,
+        ):
+            reply = self._scenario_plan_reply(
+                month_label=month_label,
+                scenario=selected_scenario,
+                focus_category=scenario_focus_category,
+                leftover_money=leftover_money,
+                goal_summary=str(context.get("goal_summary") or "").strip(),
+            )
         elif blocked_category:
             reply = self._blocked_category_reply(
                 month_label=month_label,
@@ -230,6 +246,44 @@ class _FallbackAgentClient:
         else:
             reply = FALLBACK_REPLY
         return {"reply": reply, "actions": []}
+
+    @staticmethod
+    def _scenario_plan_reply(
+        month_label: str,
+        scenario: dict,
+        focus_category: dict | None,
+        leftover_money,
+        goal_summary: str,
+    ) -> str:
+        title = str(scenario.get("title") or "Selected scenario")
+        lines = [f"For {month_label}, follow the {title} plan."]
+
+        if focus_category:
+            current_monthly = float(focus_category.get("amount") or 0)
+            current_weekly = current_monthly / 4 if current_monthly else 0
+            target_weekly = _scenario_weekly_target(focus_category, scenario)
+            lines.append(
+                f"Your current pressure point in this plan is {focus_category['category']} at ${current_monthly:.2f} this month, or about ${current_weekly:.2f}/week."
+            )
+            if target_weekly is not None:
+                lines.append(
+                    f"Weekly pacing: keep {focus_category['category']} near ${target_weekly:.2f}/week for the rest of the month."
+                )
+
+        if isinstance(leftover_money, (int, float)):
+            lines.append(
+                f"Cash flow check: you have ${float(leftover_money):.2f} left after fixed expenses in {month_label}."
+            )
+
+        for action in list(scenario.get("actions") or [])[:3]:
+            lines.append(f"Action: {action}")
+
+        goal_impact = str(scenario.get("goal_impact") or "").strip()
+        if goal_impact:
+            lines.append(f"Impact: {goal_impact}")
+        elif goal_summary:
+            lines.append(f"Goal: {goal_summary}")
+        return "\n".join(lines)
 
     @staticmethod
     def _advice_reply(
@@ -908,6 +962,145 @@ def _extract_monthly_focus_content(actions: list[dict]) -> str | None:
     for action in reversed(actions):
         if action.get("type") == "save_agent_note" and action.get("note_type") == "monthly_focus":
             return action.get("content")
+    return None
+
+
+def _scenario_key_from_message(message: str) -> str:
+    lowered = str(message or "").lower()
+    if "moderate adjustment" in lowered:
+        return "moderate_adjustment"
+    if "aggressive savings" in lowered:
+        return "aggressive_savings"
+    if "stay on current path" in lowered or "review my current path" in lowered or "current path" in lowered:
+        return "stay_on_current_path"
+    return ""
+
+
+def _resolve_selected_scenario(profile: dict, scenario_key: str | None = None, message: str = "") -> dict | None:
+    scenarios = list(profile.get("scenario_analysis") or [])
+    if not scenarios:
+        return None
+
+    requested_key = str(scenario_key or "").strip() or _scenario_key_from_message(message)
+    if not requested_key:
+        return None
+
+    return next((item for item in scenarios if item.get("scenario_key") == requested_key), None)
+
+
+def _is_scenario_plan_prompt(message: str) -> bool:
+    lowered = str(message or "").lower()
+    return "review my current path using my current spending data" in lowered or "plan using my current spending data" in lowered or (
+        "follow the" in lowered
+        and "plan" in lowered
+        and any(
+            token in lowered
+            for token in {"moderate adjustment", "aggressive savings", "current path", "stay on current path"}
+        )
+    )
+
+
+def _should_use_selected_scenario_reply(
+    message: str,
+    explicit_selected_scenario: bool,
+    referenced_subscription: dict | None,
+    alternative_follow_up: bool,
+) -> bool:
+    lowered = str(message or "").lower()
+    if _is_obvious_non_scenario_prompt(lowered) or _is_specific_subscription_intent(
+        lowered,
+        referenced_subscription=referenced_subscription,
+        alternative_follow_up=alternative_follow_up,
+    ):
+        return False
+    if explicit_selected_scenario:
+        return True
+    return _is_scenario_plan_prompt(message)
+
+
+def _is_obvious_non_scenario_prompt(lowered_message: str) -> bool:
+    return any(token in lowered_message for token in {"pattern", "patterns", "behavior", "behaviour", "habit", "habits"})
+
+
+def _is_specific_subscription_intent(
+    lowered_message: str,
+    referenced_subscription: dict | None,
+    alternative_follow_up: bool,
+) -> bool:
+    if referenced_subscription and (
+        any(token in lowered_message for token in {"alternative", "alternatives", "instead", "swap", "replace"})
+        or alternative_follow_up
+        or any(token in lowered_message for token in {"should i keep", "keep it", "cancel it", "should i cancel"})
+    ):
+        return True
+
+    return bool(
+        referenced_subscription
+        and "subscription" in lowered_message
+        and any(token in lowered_message for token in {"keep", "cut", "cancel"})
+    )
+
+
+def _scenario_focus_category(category_breakdown: list[dict], scenario: dict | None) -> dict | None:
+    if not category_breakdown or not scenario:
+        return None
+
+    actions = [str(action or "") for action in list(scenario.get("actions") or [])]
+    if not actions:
+        return None
+
+    explicit_reduce_matches: list[dict] = []
+    mentioned_matches: list[dict] = []
+    for item in category_breakdown:
+        category = str(item.get("category") or "").strip()
+        if not category:
+            continue
+        category_pattern = rf"\b{re.escape(category)}\b"
+        if any(re.search(rf"\breduce\s+{category_pattern}\s+by about\b", action, re.IGNORECASE) for action in actions):
+            explicit_reduce_matches.append(item)
+            continue
+        if any(re.search(category_pattern, action, re.IGNORECASE) for action in actions):
+            mentioned_matches.append(item)
+
+    if explicit_reduce_matches:
+        return explicit_reduce_matches[0]
+    if mentioned_matches:
+        return mentioned_matches[0]
+    return None
+
+
+def _scenario_weekly_target(biggest: dict, scenario: dict) -> float | None:
+    amount = float(biggest.get("amount") or 0)
+    if amount <= 0:
+        return None
+
+    category_name = str(biggest.get("category") or "").strip()
+    monthly_cut = _scenario_action_monthly_cut(scenario, category_name)
+    if monthly_cut is None:
+        return None
+
+    return round(max(0.0, amount - monthly_cut) / 4, 2)
+
+
+def _scenario_action_monthly_cut(scenario: dict, category_name: str) -> float | None:
+    if not category_name:
+        return None
+
+    category_pattern = re.escape(category_name)
+    for action in list(scenario.get("actions") or []):
+        action_text = str(action or "")
+        lowered = action_text.lower()
+        if "reduce" not in lowered or category_name.lower() not in lowered:
+            continue
+
+        match = re.search(
+            rf"\b{category_pattern}\b\s+by about .*?\(roughly \$([0-9][0-9,]*(?:\.[0-9]{{1,2}})?)/month\)",
+            action_text,
+            re.IGNORECASE,
+        )
+        if match:
+            normalized_amount = match.group(1).replace(",", "")
+            return round(float(normalized_amount), 2)
     return None
 
 
@@ -2314,7 +2507,15 @@ def create_app() -> Flask:
 
         storage = get_storage()
         requested_month = payload.get("month") or session.get("selected_month")
+        scenario_key = str(payload.get("scenario_key") or "").strip()
         profile = refresh_user_summary(user_id, requested_month)
+        selected_scenario = _resolve_selected_scenario(profile, scenario_key=scenario_key, message=message)
+        if selected_scenario:
+            profile = {
+                **profile,
+                "selected_scenario": selected_scenario,
+                "selected_scenario_explicit": bool(scenario_key),
+            }
         session["selected_month"] = profile.get("selected_month")
         heuristic_result = get_coach().process_message(message, profile)
         action = heuristic_result["action"]
@@ -2322,6 +2523,13 @@ def create_app() -> Flask:
             apply_agent_actions(user_id, [action])
 
         profile = refresh_user_summary(user_id, session.get("selected_month"))
+        selected_scenario = _resolve_selected_scenario(profile, scenario_key=scenario_key, message=message)
+        if selected_scenario:
+            profile = {
+                **profile,
+                "selected_scenario": selected_scenario,
+                "selected_scenario_explicit": bool(scenario_key),
+            }
         agent_result = get_agent_service().run_chat_turn(message=message, agent_context=profile)
         agent_result = _recover_agent_result(message=message, profile=profile, agent_result=agent_result)
         monthly_focus_content = _extract_monthly_focus_content(agent_result["actions"])
