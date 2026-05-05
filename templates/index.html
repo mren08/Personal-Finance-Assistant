@@ -643,7 +643,7 @@
           <div class="panel">
             <h2>Your Spending Profile</h2>
             <div id="spending-profile-card" class="profile-card">
-              {% if profile.spending_profile %}
+              {% if profile.transaction_count and profile.spending_profile %}
                 <strong id="spending-profile-name">{{ profile.spending_profile.name }}</strong>
                 <p id="spending-profile-description" class="muted" style="margin:10px 0 0;">{{ profile.spending_profile.description }}</p>
                 <ul id="spending-profile-reasons">
@@ -654,6 +654,33 @@
                 <p id="spending-profile-why-this" class="small muted" style="margin:12px 0 0;">{{ profile.spending_profile.why_this }}</p>
               {% else %}
                 <div class="empty">Upload recent spending and save a plan to infer your spending profile.</div>
+              {% endif %}
+            </div>
+          </div>
+
+          <div class="panel">
+            <h2>Ways to Improve Your Outcome</h2>
+            <div id="scenario-analysis" class="scenario-grid">
+              {% if profile.scenario_analysis %}
+                {% for scenario in profile.scenario_analysis %}
+                  <article class="scenario-card">
+                    <div>
+                      <strong>{{ scenario.title }}</strong>
+                      <div class="impact">{{ '$%.2f'|format(scenario.savings_impact_monthly or 0) }}/mo</div>
+                    </div>
+                    <ul>
+                      {% for action in scenario.actions %}
+                        <li>{{ action }}</li>
+                      {% endfor %}
+                    </ul>
+                    <div class="small">{{ scenario.goal_impact }}</div>
+                    <div class="small muted">{{ scenario.tradeoff }}</div>
+                    <div class="small muted">{{ scenario.why_this }}</div>
+                    <button type="button" class="secondary" data-scenario-key="{{ scenario.scenario_key }}" data-chat-prompt="{{ scenario.chat_prompt }}">{{ scenario.cta_label or 'Ask AI to build this plan' }}</button>
+                  </article>
+                {% endfor %}
+              {% else %}
+                <div class="empty" style="grid-column: 1 / -1;">Upload recent spending and save a plan to unlock scenario analysis.</div>
               {% endif %}
             </div>
           </div>
@@ -711,33 +738,6 @@
                   <li class="empty">Upload a statement to see how your spending splits by category.</li>
                 {% endif %}
               </ul>
-            </div>
-          </div>
-
-          <div class="panel">
-            <h2>Ways to Improve Your Outcome</h2>
-            <div id="scenario-analysis" class="scenario-grid">
-              {% if profile.scenario_analysis %}
-                {% for scenario in profile.scenario_analysis %}
-                  <article class="scenario-card">
-                    <div>
-                      <strong>{{ scenario.title }}</strong>
-                      <div class="impact">{{ '$%.2f'|format(scenario.savings_impact_monthly or 0) }}/mo</div>
-                    </div>
-                    <ul>
-                      {% for action in scenario.actions %}
-                        <li>{{ action }}</li>
-                      {% endfor %}
-                    </ul>
-                    <div class="small">{{ scenario.goal_impact }}</div>
-                    <div class="small muted">{{ scenario.tradeoff }}</div>
-                    <div class="small muted">{{ scenario.why_this }}</div>
-                    <button type="button" class="secondary" data-scenario-key="{{ scenario.scenario_key }}" data-chat-prompt="{{ scenario.chat_prompt }}">{{ scenario.cta_label or 'Ask AI to build this plan' }}</button>
-                  </article>
-                {% endfor %}
-              {% else %}
-                <div class="empty" style="grid-column: 1 / -1;">Upload recent spending and save a plan to unlock scenario analysis.</div>
-              {% endif %}
             </div>
           </div>
 
@@ -1394,7 +1394,7 @@
 
       function renderSpendingProfile(spendingProfile) {
         const card = document.getElementById("spending-profile-card");
-        if (!spendingProfile || !spendingProfile.name) {
+        if (!currentProfile.transaction_count || !spendingProfile || !spendingProfile.name) {
           card.innerHTML = '<div class="empty">Upload recent spending and save a plan to infer your spending profile.</div>';
           return;
         }

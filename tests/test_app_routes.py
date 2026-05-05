@@ -213,6 +213,16 @@ class AppRouteTests(unittest.TestCase):
         self.assertIn(b"Japan trip plan", response.data)
         self.assertIn(b"AI Chatbot", response.data)
 
+    def test_logged_in_dashboard_shows_empty_spending_profile_before_any_upload(self):
+        self._signup_and_login()
+
+        response = self.client.get("/")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(b"Your Spending Profile", response.data)
+        self.assertIn(b"Upload recent spending and save a plan to infer your spending profile.", response.data)
+        self.assertNotIn(b"Flexible Spender", response.data)
+
     def test_demo_logout_clears_demo_session(self):
         self.client.post("/demo", follow_redirects=False)
 
@@ -1357,7 +1367,7 @@ class AppRouteTests(unittest.TestCase):
         self.assertIn(b'body: JSON.stringify({ message: input.value, month: document.getElementById("month-selector").value, scenario_key: chatForm.dataset.scenarioKey || "", scenario_prompt: chatForm.dataset.scenarioPrompt || "" })', response.data)
         self.assertIn(b'document.getElementById("scenario-analysis").addEventListener("click"', response.data)
 
-    def test_dashboard_places_scenarios_below_chart_and_before_monthly_plan(self):
+    def test_dashboard_places_scenarios_below_profile_and_before_monthly_plan(self):
         self._signup_and_login()
         self.client.post(
             "/api/upload-statement",
@@ -1380,19 +1390,25 @@ class AppRouteTests(unittest.TestCase):
         response = self.client.get("/?month=2026-04")
 
         self.assertEqual(response.status_code, 200)
-        chart_index = response.data.find(b'id="category-breakdown-heading"')
+        profile_index = response.data.find(b'id="spending-profile-card"')
         scenario_index = response.data.find(b'id="scenario-analysis"')
+        chart_index = response.data.find(b'id="category-breakdown-heading"')
         monthly_plan_index = response.data.find(b'id="profile-form"')
 
-        self.assertGreaterEqual(chart_index, 0)
+        self.assertGreaterEqual(profile_index, 0)
         self.assertGreaterEqual(scenario_index, 0)
+        self.assertGreaterEqual(chart_index, 0)
         self.assertGreaterEqual(monthly_plan_index, 0)
         self.assertLess(
-            chart_index,
+            profile_index,
             scenario_index,
         )
         self.assertLess(
             scenario_index,
+            chart_index,
+        )
+        self.assertLess(
+            chart_index,
             monthly_plan_index,
         )
         self.assertGreaterEqual(response.data.count(b"Based on your uploaded transactions"), 2)
