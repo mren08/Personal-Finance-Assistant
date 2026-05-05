@@ -1645,7 +1645,7 @@ class Storage:
     def _top_discretionary_category(
         cls,
         category_breakdown: list[dict[str, Any]],
-    ) -> dict[str, Any] | None:
+    ) -> dict[str, Any]:
         for item in category_breakdown:
             if cls._is_discretionary_category(str(item.get("category") or "")):
                 return item
@@ -1734,7 +1734,7 @@ class Storage:
         recurring_expenses: list[dict[str, Any]],
         transactions: list[dict[str, Any]],
         selected_month: str | None,
-    ) -> dict[str, Any]:
+    ) -> dict[str, Any] | None:
         goal_summary = cls._goal_summary_from_profile(financial_profile)
         current_discretionary_spend = cls._current_discretionary_spend(category_breakdown)
         discretionary_cap_total = cls._discretionary_cap_total(category_breakdown, financial_profile)
@@ -2315,11 +2315,10 @@ class Storage:
             "title": title,
             "savings_impact_monthly": 0,
             "actions": [
-                "Upload more transaction history to generate stronger scenario recommendations.",
-                "Upload more transaction history for at least one full month so category and subscription patterns are clearer.",
+                "Upload at least one full month of transaction history so these scenarios can become more specific.",
             ],
             "goal_impact": "This could become more specific once more transaction history is uploaded.",
-            "tradeoff": "Upload more transaction history to generate stronger scenario recommendations.",
+            "tradeoff": "Right now this is a placeholder view, not a personalized scenario yet.",
             "why_this": "Based on your uploaded transactions, budget caps, recurring subscriptions, and savings goal.",
             "chat_prompt": chat_prompt,
             "cta_label": "Ask AI to build this plan",
