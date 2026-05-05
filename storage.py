@@ -2314,12 +2314,10 @@ class Storage:
         return {
             "title": title,
             "savings_impact_monthly": 0,
-            "actions": [
-                "Upload at least one full month of transaction history so these scenarios can become more specific.",
-            ],
-            "goal_impact": "This could become more specific once more transaction history is uploaded.",
-            "tradeoff": "Right now this is a placeholder view, not a personalized scenario yet.",
-            "why_this": "Based on your uploaded transactions, budget caps, recurring subscriptions, and savings goal.",
+            "actions": [],
+            "goal_impact": "",
+            "tradeoff": "",
+            "why_this": "",
             "chat_prompt": chat_prompt,
             "cta_label": "Ask AI to build this plan",
             "scenario_key": scenario_key,

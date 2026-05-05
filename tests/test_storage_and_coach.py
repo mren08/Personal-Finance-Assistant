@@ -1186,15 +1186,11 @@ class StorageTests(unittest.TestCase):
                 ],
             )
             for scenario in scenarios:
-                self.assertIn("placeholder", scenario["tradeoff"].lower())
-                self.assertIn("could", scenario["goal_impact"].lower())
-                self.assertEqual(len(scenario["actions"]), 1)
-                self.assertIn("one full month", scenario["actions"][0].lower())
+                self.assertEqual(scenario["actions"], [])
+                self.assertEqual(scenario["goal_impact"], "")
+                self.assertEqual(scenario["tradeoff"], "")
                 self.assertEqual(scenario["cta_label"], "Ask AI to build this plan")
-                self.assertEqual(
-                    scenario["why_this"],
-                    "Based on your uploaded transactions, budget caps, recurring subscriptions, and savings goal.",
-                )
+                self.assertEqual(scenario["why_this"], "")
 
     def test_dashboard_scenarios_fallback_for_profile_only_user_without_month_evidence(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -1216,14 +1212,11 @@ class StorageTests(unittest.TestCase):
             scenarios = dashboard["scenario_analysis"]
             self.assertEqual(len(scenarios), 3)
             for scenario in scenarios:
-                self.assertIn("placeholder", scenario["tradeoff"].lower())
-                self.assertEqual(len(scenario["actions"]), 1)
-                self.assertIn("one full month", scenario["actions"][0].lower())
+                self.assertEqual(scenario["actions"], [])
+                self.assertEqual(scenario["goal_impact"], "")
+                self.assertEqual(scenario["tradeoff"], "")
                 self.assertEqual(scenario["cta_label"], "Ask AI to build this plan")
-                self.assertEqual(
-                    scenario["why_this"],
-                    "Based on your uploaded transactions, budget caps, recurring subscriptions, and savings goal.",
-                )
+                self.assertEqual(scenario["why_this"], "")
 
     def test_dashboard_scenarios_use_resolved_selected_month_when_month_key_is_omitted(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -1347,13 +1340,10 @@ class StorageTests(unittest.TestCase):
             scenarios = dashboard["scenario_analysis"]
             self.assertEqual(len(scenarios), 3)
             for scenario in scenarios:
-                self.assertIn("placeholder", scenario["tradeoff"].lower())
-                self.assertEqual(len(scenario["actions"]), 1)
-                self.assertIn("one full month", scenario["actions"][0].lower())
-                self.assertEqual(
-                    scenario["why_this"],
-                    "Based on your uploaded transactions, budget caps, recurring subscriptions, and savings goal.",
-                )
+                self.assertEqual(scenario["actions"], [])
+                self.assertEqual(scenario["goal_impact"], "")
+                self.assertEqual(scenario["tradeoff"], "")
+                self.assertEqual(scenario["why_this"], "")
 
     def test_dashboard_scenarios_fallback_when_selected_month_has_only_one_small_discretionary_transaction(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -1405,13 +1395,10 @@ class StorageTests(unittest.TestCase):
             scenarios = dashboard["scenario_analysis"]
             self.assertEqual(len(scenarios), 3)
             for scenario in scenarios:
-                self.assertIn("placeholder", scenario["tradeoff"].lower())
-                self.assertEqual(len(scenario["actions"]), 1)
-                self.assertIn("one full month", scenario["actions"][0].lower())
-                self.assertEqual(
-                    scenario["why_this"],
-                    "Based on your uploaded transactions, budget caps, recurring subscriptions, and savings goal.",
-                )
+                self.assertEqual(scenario["actions"], [])
+                self.assertEqual(scenario["goal_impact"], "")
+                self.assertEqual(scenario["tradeoff"], "")
+                self.assertEqual(scenario["why_this"], "")
 
     def test_dashboard_scenarios_do_not_double_count_subscriptions_category_cuts(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -1611,7 +1598,9 @@ class StorageTests(unittest.TestCase):
             scenarios = dashboard["scenario_analysis"]
             self.assertEqual(len(scenarios), 3)
             for scenario in scenarios:
-                self.assertIn("placeholder", scenario["tradeoff"].lower())
+                self.assertEqual(scenario["actions"], [])
+                self.assertEqual(scenario["goal_impact"], "")
+                self.assertEqual(scenario["tradeoff"], "")
 
     def test_dashboard_scenarios_do_not_recommend_fixed_bills_as_subscription_cuts(self):
         with tempfile.TemporaryDirectory() as tmpdir:

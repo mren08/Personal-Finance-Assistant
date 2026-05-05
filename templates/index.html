@@ -668,14 +668,22 @@
                       <strong>{{ scenario.title }}</strong>
                       <div class="impact">{{ '$%.2f'|format(scenario.savings_impact_monthly or 0) }}/mo</div>
                     </div>
-                    <ul>
-                      {% for action in scenario.actions %}
-                        <li>{{ action }}</li>
-                      {% endfor %}
-                    </ul>
-                    <div class="small">{{ scenario.goal_impact }}</div>
-                    <div class="small muted">{{ scenario.tradeoff }}</div>
-                    <div class="small muted">{{ scenario.why_this }}</div>
+                    {% if scenario.actions %}
+                      <ul>
+                        {% for action in scenario.actions %}
+                          <li>{{ action }}</li>
+                        {% endfor %}
+                      </ul>
+                    {% endif %}
+                    {% if scenario.goal_impact %}
+                      <div class="small">{{ scenario.goal_impact }}</div>
+                    {% endif %}
+                    {% if scenario.tradeoff %}
+                      <div class="small muted">{{ scenario.tradeoff }}</div>
+                    {% endif %}
+                    {% if scenario.why_this %}
+                      <div class="small muted">{{ scenario.why_this }}</div>
+                    {% endif %}
                     <button type="button" class="secondary" data-scenario-key="{{ scenario.scenario_key }}" data-chat-prompt="{{ scenario.chat_prompt }}">{{ scenario.cta_label or 'Ask AI to build this plan' }}</button>
                   </article>
                 {% endfor %}
@@ -1421,10 +1429,10 @@
               <strong>${escapeHtml(scenario.title || "")}</strong>
               <div class="impact">${money(scenario.savings_impact_monthly || 0)}/mo</div>
             </div>
-            <ul>${(scenario.actions || []).map((action) => `<li>${escapeHtml(action)}</li>`).join("")}</ul>
-            <div class="small">${escapeHtml(scenario.goal_impact || "")}</div>
-            <div class="small muted">${escapeHtml(scenario.tradeoff || "")}</div>
-            <div class="small muted">${escapeHtml(scenario.why_this || "")}</div>
+            ${(scenario.actions || []).length ? `<ul>${(scenario.actions || []).map((action) => `<li>${escapeHtml(action)}</li>`).join("")}</ul>` : ""}
+            ${scenario.goal_impact ? `<div class="small">${escapeHtml(scenario.goal_impact || "")}</div>` : ""}
+            ${scenario.tradeoff ? `<div class="small muted">${escapeHtml(scenario.tradeoff || "")}</div>` : ""}
+            ${scenario.why_this ? `<div class="small muted">${escapeHtml(scenario.why_this || "")}</div>` : ""}
             <button type="button" class="secondary" data-scenario-key="${escapeHtml(scenario.scenario_key || "")}" data-chat-prompt="${escapeHtml(scenario.chat_prompt || "")}">${escapeHtml(scenario.cta_label || "Ask AI to build this plan")}</button>
           </article>
         `).join("");
