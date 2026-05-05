@@ -1357,6 +1357,46 @@ class AppRouteTests(unittest.TestCase):
         self.assertIn(b'body: JSON.stringify({ message: input.value, month: document.getElementById("month-selector").value, scenario_key: chatForm.dataset.scenarioKey || "", scenario_prompt: chatForm.dataset.scenarioPrompt || "" })', response.data)
         self.assertIn(b'document.getElementById("scenario-analysis").addEventListener("click"', response.data)
 
+    def test_dashboard_places_scenarios_below_chart_and_before_monthly_plan(self):
+        self._signup_and_login()
+        self.client.post(
+            "/api/upload-statement",
+            data={"statement": (io.BytesIO(INSIGHTS_CSV.encode("utf-8")), "statement.csv")},
+            content_type="multipart/form-data",
+        )
+        self.client.post(
+            "/api/profile",
+            json={
+                "month": "2026-04",
+                "monthly_income": 4000,
+                "fixed_expenses": 2200,
+                "goal_name": "Japan trip",
+                "goal_target_amount": 2000,
+                "goal_target_date": "2026-09-01",
+                "current_saved_amount": 500,
+            },
+        )
+
+        response = self.client.get("/?month=2026-04")
+
+        self.assertEqual(response.status_code, 200)
+        chart_index = response.data.find(b'id="category-breakdown-heading"')
+        scenario_index = response.data.find(b'id="scenario-analysis"')
+        monthly_plan_index = response.data.find(b'id="profile-form"')
+
+        self.assertGreaterEqual(chart_index, 0)
+        self.assertGreaterEqual(scenario_index, 0)
+        self.assertGreaterEqual(monthly_plan_index, 0)
+        self.assertLess(
+            chart_index,
+            scenario_index,
+        )
+        self.assertLess(
+            scenario_index,
+            monthly_plan_index,
+        )
+        self.assertGreaterEqual(response.data.count(b"Based on your uploaded transactions"), 2)
+
     def test_profile_update_preserves_legacy_budgeting_goal_when_structured_goal_fields_are_omitted(self):
         self._signup_and_login()
 

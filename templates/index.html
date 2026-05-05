@@ -659,89 +659,6 @@
           </div>
 
           <div class="panel">
-            <h2>Monthly plan</h2>
-            <form id="profile-form" class="profile-form">
-              <div>
-                <label for="monthly-income">Monthly income</label>
-                <input
-                  id="monthly-income"
-                  type="number"
-                  step="0.01"
-                  value="{{ profile.financial_profile.monthly_income if profile.financial_profile else 0 }}"
-                >
-              </div>
-              <div>
-                <label for="fixed-expenses">Fixed expenses</label>
-                <input
-                  id="fixed-expenses"
-                  type="number"
-                  step="0.01"
-                  value="{{ profile.financial_profile.fixed_expenses if profile.financial_profile else 0 }}"
-                >
-              </div>
-              <div class="full">
-                <div class="subsection-label">Savings goal</div>
-              </div>
-              <div>
-                <label for="goal-name">Goal name</label>
-                <input
-                  id="goal-name"
-                  type="text"
-                  value="{{ profile.financial_profile.goal_name if profile.financial_profile else '' }}"
-                  placeholder="Japan trip"
-                >
-              </div>
-              <div>
-                <label for="goal-target-amount">Target amount</label>
-                <input
-                  id="goal-target-amount"
-                  type="number"
-                  step="0.01"
-                  min="0"
-                  value="{{ profile.financial_profile.goal_target_amount if profile.financial_profile else 0 }}"
-                >
-              </div>
-              <div>
-                <label for="goal-target-date">Target date</label>
-                <input
-                  id="goal-target-date"
-                  type="date"
-                  value="{{ profile.financial_profile.goal_target_date if profile.financial_profile else '' }}"
-                >
-              </div>
-              <div>
-                <label for="current-saved-amount">Current saved amount</label>
-                <input
-                  id="current-saved-amount"
-                  type="number"
-                  step="0.01"
-                  min="0"
-                  value="{{ profile.financial_profile.current_saved_amount if profile.financial_profile else 0 }}"
-                >
-              </div>
-              <div class="full">
-                <button type="submit">Save plan</button>
-              </div>
-            </form>
-            <p id="profile-status" class="status"></p>
-            <ul class="list plan-history" id="monthly-plan-history">
-              {% if profile.monthly_plan_history %}
-                {% for plan in profile.monthly_plan_history %}
-                  <li>
-                    <div class="row">
-                      <strong>{{ plan.month_label }}</strong>
-                      <span class="small muted">{{ plan.updated_at }}</span>
-                    </div>
-                    <div class="small">{{ plan.summary }}</div>
-                  </li>
-                {% endfor %}
-              {% else %}
-                <li class="empty">No monthly plans saved yet. Save income, fixed expenses, and a goal for the selected month.</li>
-              {% endif %}
-            </ul>
-          </div>
-
-          <div class="panel">
             <h2 id="leftover-heading">Left in {{ profile.selected_month_label or 'this month' }}</h2>
             <div class="summary-grid">
               <div class="metric">
@@ -822,6 +739,89 @@
                 <div class="empty" style="grid-column: 1 / -1;">Upload recent spending and save a plan to unlock scenario analysis.</div>
               {% endif %}
             </div>
+          </div>
+
+          <div class="panel">
+            <h2>Monthly plan</h2>
+            <form id="profile-form" class="profile-form">
+              <div>
+                <label for="monthly-income">Monthly income</label>
+                <input
+                  id="monthly-income"
+                  type="number"
+                  step="0.01"
+                  value="{{ profile.financial_profile.monthly_income if profile.financial_profile else 0 }}"
+                >
+              </div>
+              <div>
+                <label for="fixed-expenses">Fixed expenses</label>
+                <input
+                  id="fixed-expenses"
+                  type="number"
+                  step="0.01"
+                  value="{{ profile.financial_profile.fixed_expenses if profile.financial_profile else 0 }}"
+                >
+              </div>
+              <div class="full">
+                <div class="subsection-label">Savings goal</div>
+              </div>
+              <div>
+                <label for="goal-name">Goal name</label>
+                <input
+                  id="goal-name"
+                  type="text"
+                  value="{{ profile.financial_profile.goal_name if profile.financial_profile else '' }}"
+                  placeholder="Japan trip"
+                >
+              </div>
+              <div>
+                <label for="goal-target-amount">Target amount</label>
+                <input
+                  id="goal-target-amount"
+                  type="number"
+                  step="0.01"
+                  min="0"
+                  value="{{ profile.financial_profile.goal_target_amount if profile.financial_profile else 0 }}"
+                >
+              </div>
+              <div>
+                <label for="goal-target-date">Target date</label>
+                <input
+                  id="goal-target-date"
+                  type="date"
+                  value="{{ profile.financial_profile.goal_target_date if profile.financial_profile else '' }}"
+                >
+              </div>
+              <div>
+                <label for="current-saved-amount">Current saved amount</label>
+                <input
+                  id="current-saved-amount"
+                  type="number"
+                  step="0.01"
+                  min="0"
+                  value="{{ profile.financial_profile.current_saved_amount if profile.financial_profile else 0 }}"
+                >
+              </div>
+              <div class="full">
+                <button type="submit">Save plan</button>
+              </div>
+            </form>
+            <p id="profile-status" class="status"></p>
+            <ul class="list plan-history" id="monthly-plan-history">
+              {% if profile.monthly_plan_history %}
+                {% for plan in profile.monthly_plan_history %}
+                  <li>
+                    <div class="row">
+                      <strong>{{ plan.month_label }}</strong>
+                      <span class="small muted">{{ plan.updated_at }}</span>
+                    </div>
+                    <div class="small">{{ plan.summary }}</div>
+                  </li>
+                {% endfor %}
+              {% else %}
+                <li class="empty">No monthly plans saved yet. Save income, fixed expenses, and a goal for the selected month.</li>
+              {% endif %}
+            </ul>
           </div>
 
           <div class="panel">
