@@ -368,6 +368,7 @@
       grid-template-columns: repeat(3, minmax(0, 1fr));
       gap: 14px;
       align-items: stretch;
+      min-width: 0;
     }
     .scenario-banner {
       margin-bottom: 12px;
@@ -387,21 +388,33 @@
       gap: 10px;
       align-content: start;
       min-height: 100%;
+      min-width: 0;
+      overflow: hidden;
     }
     .scenario-card-header {
       display: grid;
-      gap: 4px;
+      grid-template-columns: minmax(0, 1fr) auto;
+      align-items: start;
+      gap: 10px;
+      min-width: 0;
+    }
+    .scenario-card-header > div:first-child {
+      min-width: 0;
     }
     .scenario-card-title {
       font-size: 0.94rem;
       font-weight: 700;
       line-height: 1.25;
+      overflow-wrap: anywhere;
     }
     .scenario-card .impact {
-      font-size: 2rem;
+      font-size: clamp(1.45rem, 1.2rem + 1vw, 2rem);
       font-weight: 800;
       line-height: 1;
       letter-spacing: -0.03em;
+      text-align: right;
+      white-space: nowrap;
+      max-width: 100%;
     }
     .scenario-card ul {
       margin: 0;
@@ -410,6 +423,10 @@
       gap: 6px;
       font-size: 0.9rem;
       color: var(--ink);
+      min-width: 0;
+    }
+    .scenario-card li {
+      overflow-wrap: anywhere;
     }
     .scenario-card li::marker {
       color: var(--accent);
@@ -418,6 +435,8 @@
       font-size: 0.88rem;
       color: var(--muted);
       line-height: 1.45;
+      min-width: 0;
+      overflow-wrap: anywhere;
     }
     .scenario-outcome strong {
       color: var(--ink);
@@ -426,6 +445,9 @@
       margin-top: auto;
       padding: 10px 12px;
       font-size: 0.92rem;
+      min-width: 0;
+      white-space: normal;
+      overflow-wrap: anywhere;
     }
     .list {
       list-style: none;
