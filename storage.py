@@ -1456,6 +1456,30 @@ class Storage:
 
         monthly_summary = self.get_monthly_summary(user_id, selected_month)
         receipt_behavior_notes = self.list_receipt_behavior_insights(user_id, selected_month) if selected_month else []
+        has_uploaded_history = bool(transactions)
+        top_insights = self._top_insights(
+            transactions=transactions,
+            selected_month=selected_month,
+            category_totals=category_totals,
+            recurring_expenses=recurring_expenses,
+            monthly_summary=monthly_summary,
+            financial_profile=financial_profile,
+            receipt_notes=receipt_behavior_notes,
+        )
+        recommended_actions = self._recommended_actions(
+            category_totals=category_totals,
+            recurring_expenses=recurring_expenses,
+            monthly_summary=monthly_summary,
+            financial_profile=financial_profile,
+        )
+        spending_profile = self._spending_profile(
+            category_breakdown=category_breakdown,
+            monthly_summary=monthly_summary,
+            financial_profile=financial_profile,
+            recurring_expenses=recurring_expenses,
+            transactions=transactions,
+            selected_month=selected_month,
+        )
         scenario_analysis = self._scenario_analysis(
             category_breakdown=category_breakdown,
             recurring_expenses=recurring_expenses,
@@ -1465,7 +1489,27 @@ class Storage:
             selected_month=selected_month,
             selected_transactions=selected_transactions,
         )
+        messages = self.list_chat_messages(user_id)
+
+        top_insights_preview = not has_uploaded_history
+        recommended_actions_preview = not has_uploaded_history
+        spending_profile_preview = not has_uploaded_history
+        scenario_analysis_preview = not has_uploaded_history
+        chat_preview = not messages
+
+        if top_insights_preview:
+            top_insights = self._preview_top_insights()
+        if recommended_actions_preview:
+            recommended_actions = self._preview_recommended_actions()
+        if spending_profile_preview:
+            spending_profile = self._preview_spending_profile()
+        if scenario_analysis_preview:
+            scenario_analysis = self._preview_scenario_cards()
+        if chat_preview:
+            messages = self._preview_chat_messages()
+
         return {
+            "has_uploaded_history": has_uploaded_history,
             "transaction_count": len(selected_transactions),
             "total_spent": total_spent,
             "category_totals": category_totals,
@@ -1481,7 +1525,8 @@ class Storage:
             "selected_month_label": self._month_label(selected_month) if selected_month else None,
             "subscriptions": recurring_expenses,
             "monthly_recurring_total": monthly_recurring_total,
-            "messages": self.list_chat_messages(user_id),
+            "messages": messages,
+            "chat_preview": chat_preview,
             "subscription_decisions": self.list_subscription_decisions(user_id),
             "user_decisions": self.list_user_decisions(user_id),
             "pending_action": self.get_pending_action(user_id),
@@ -1490,36 +1535,24 @@ class Storage:
             "agent_notes": self.list_agent_notes(user_id, selected_month),
             "monthly_summary": monthly_summary,
             "goal_summary": self._goal_summary_from_profile(financial_profile),
-            "spending_profile": self._spending_profile(
-                category_breakdown=category_breakdown,
-                monthly_summary=monthly_summary,
-                financial_profile=financial_profile,
-                recurring_expenses=recurring_expenses,
-                transactions=transactions,
-                selected_month=selected_month,
-            ),
-            "top_insights": self._top_insights(
-                transactions=transactions,
-                selected_month=selected_month,
-                category_totals=category_totals,
-                recurring_expenses=recurring_expenses,
-                monthly_summary=monthly_summary,
-                financial_profile=financial_profile,
-                receipt_notes=receipt_behavior_notes,
-            ),
+            "spending_profile": spending_profile,
+            "spending_profile_preview": spending_profile_preview,
+            "top_insights": top_insights,
+            "top_insights_preview": top_insights_preview,
             "behavioral_insights": self._behavioral_insights(
                 transactions=transactions,
                 selected_month=selected_month,
                 monthly_income=float((financial_profile or {}).get("monthly_income") or 0),
             ),
-            "recommended_actions": self._recommended_actions(
-                category_totals=category_totals,
-                recurring_expenses=recurring_expenses,
-                monthly_summary=monthly_summary,
-                financial_profile=financial_profile,
-            ),
+            "recommended_actions": recommended_actions,
+            "recommended_actions_preview": recommended_actions_preview,
             "scenario_analysis": scenario_analysis,
-            "scenario_analysis_notice": self._scenario_analysis_notice(scenario_analysis),
+            "scenario_analysis_preview": scenario_analysis_preview,
+            "scenario_analysis_notice": (
+                "Upload at least one month of transaction history to generate personalized scenarios. Below is an example of how your options will appear."
+                if scenario_analysis_preview
+                else self._scenario_analysis_notice(scenario_analysis)
+            ),
             "pending_receipts": self.list_pending_receipt_extractions(user_id),
         }
 
@@ -1554,6 +1587,105 @@ class Storage:
             str(financial_profile.get("goal_target_date") or "").strip(),
             float(financial_profile.get("current_saved_amount") or 0),
         )
+
+    @staticmethod
+    def _preview_top_insights() -> list[str]:
+        return [
+            "Dining is 28% above your usual monthly average.",
+            "You have $72/month in recurring subscriptions.",
+            "At your current pace, you may miss your savings goal by $210.",
+        ]
+
+    @staticmethod
+    def _preview_recommended_actions() -> list[str]:
+        return [
+            "Set a weekly discretionary cap based on your income and fixed expenses.",
+            "Cancel or pause low-priority subscriptions.",
+            "Reduce your highest overspending category to stay on track.",
+        ]
+
+    @staticmethod
+    def _preview_spending_profile() -> dict[str, Any]:
+        return {
+            "name": "",
+            "description": (
+                "Your spending profile helps tailor recommendations to your behavior. "
+                "Upload spending history and save a plan to infer whether you are closer "
+                "to a Reactive Spender, Budget Optimizer, Goal-Focused Saver, or Flexible Spender."
+            ),
+            "reasons": [],
+            "why_this": (
+                "Example: A Reactive Spender may get stronger weekly caps, while a Budget Optimizer "
+                "may get smaller optimization suggestions."
+            ),
+        }
+
+    @staticmethod
+    def _preview_chat_messages() -> list[dict[str, str]]:
+        return [
+            {
+                "role": "user",
+                "content": "Can I afford a $300 weekend trip this month?",
+            },
+            {
+                "role": "assistant",
+                "content": (
+                    "Yes, but only if you reduce dining by about $60 this month. "
+                    "Otherwise, you may exceed your discretionary budget by roughly $120."
+                ),
+            },
+        ]
+
+    @staticmethod
+    def _preview_scenario_cards() -> list[dict[str, Any]]:
+        return [
+            {
+                "title": "Stay on Current Path",
+                "savings_impact_monthly": 0,
+                "actions": [
+                    "Keep current spending habits",
+                    "No changes required",
+                ],
+                "goal_impact": "May miss goal by $220.",
+                "tradeoff": "",
+                "why_this": "",
+                "chat_prompt": "Help me review my current path using my current spending data.",
+                "cta_label": "Review Plan",
+                "scenario_key": "stay_on_current_path",
+                "is_example": True,
+            },
+            {
+                "title": "Moderate Adjustment",
+                "savings_impact_monthly": 84,
+                "actions": [
+                    "Reduce dining by 20%",
+                    "Cancel one subscription",
+                ],
+                "goal_impact": "Stay on track for your savings goal.",
+                "tradeoff": "",
+                "why_this": "",
+                "chat_prompt": "Help me follow the Moderate Adjustment plan using my current spending data.",
+                "cta_label": "Build This Plan",
+                "scenario_key": "moderate_adjustment",
+                "is_example": True,
+            },
+            {
+                "title": "Aggressive Savings",
+                "savings_impact_monthly": 185,
+                "actions": [
+                    "Reduce dining by 35%",
+                    "Reduce shopping by 30%",
+                    "Pause two subscriptions",
+                ],
+                "goal_impact": "Reach your goal one month earlier.",
+                "tradeoff": "",
+                "why_this": "",
+                "chat_prompt": "Help me follow the Aggressive Savings plan using my current spending data.",
+                "cta_label": "Build This Plan",
+                "scenario_key": "aggressive_savings",
+                "is_example": True,
+            },
+        ]
 
     @staticmethod
     def _discretionary_categories() -> set[str]:

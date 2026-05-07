@@ -217,17 +217,47 @@ class AppRouteTests(unittest.TestCase):
         self._signup_and_login()
 
         response = self.client.get("/")
+        page = response.get_data(as_text=True)
 
         self.assertEqual(response.status_code, 200)
-        self.assertIn(b"Your Spending Profile", response.data)
-        self.assertIn(b"Upload recent spending and save a plan to infer your spending profile.", response.data)
-        self.assertNotIn(b"Flexible Spender", response.data)
+        self.assertIn("This system doesn’t just track spending — it helps you decide what to do next.", page)
+        self.assertIn("Upload one month of transaction history to unlock personalized insights like:", page)
+        self.assertIn("Dining is 28% above your usual monthly average.", page)
+        self.assertIn("You have $72/month in recurring subscriptions.", page)
+        self.assertIn("At your current pace, you may miss your savings goal by $210.", page)
+        self.assertIn("Once your data is uploaded, the app will suggest concrete next steps like:", page)
+        self.assertIn("Set a weekly discretionary cap based on your income and fixed expenses.", page)
+        self.assertIn("Cancel or pause low-priority subscriptions.", page)
+        self.assertIn("Reduce your highest overspending category to stay on track.", page)
+        self.assertIn("Your Spending Profile", page)
+        self.assertIn("Your spending profile helps tailor recommendations to your behavior.", page)
+        self.assertIn("Reactive Spender, Budget Optimizer, Goal-Focused Saver, or Flexible Spender.", page)
+        self.assertIn("Example: A Reactive Spender may get stronger weekly caps, while a Budget Optimizer may get smaller optimization suggestions.", page)
+        self.assertNotIn(">Flexible Spender<", page)
         self.assertIn(
-            b"Upload at least one month of transaction history to generate personalized scenarios.",
-            response.data,
+            "Upload at least one month of transaction history to generate personalized scenarios. Below is an example of how your options will appear.",
+            page,
         )
-        self.assertNotIn(b"Based on your uploaded transactions, budget caps, recurring subscriptions, and savings goal.", response.data)
-        self.assertNotIn(b"Right now this is a placeholder view", response.data)
+        self.assertIn("Stay on Current Path", page)
+        self.assertIn("+$84.00/mo", page)
+        self.assertIn("+$185.00/mo", page)
+        self.assertIn("May miss goal by $220.", page)
+        self.assertIn("Stay on track for your savings goal.", page)
+        self.assertIn("Reach your goal one month earlier.", page)
+        self.assertIn("Review Plan", page)
+        self.assertIn("Build This Plan", page)
+        self.assertIn("Can I afford a $300 weekend trip this month?", page)
+        self.assertIn("Yes, but only if you reduce dining by about $60 this month.", page)
+        self.assertIn(
+            "Upload receipts to capture real-time or missing spending, such as cash purchases, small transactions, or expenses not yet reflected in your card statement.",
+            page,
+        )
+        self.assertIn(
+            "Upload a statement to see transactions organized by category, merchant, date, and amount.",
+            page,
+        )
+        self.assertNotIn("Based on your uploaded transactions, budget caps, recurring subscriptions, and savings goal.", page)
+        self.assertNotIn("Right now this is a placeholder view", page)
 
     def test_demo_logout_clears_demo_session(self):
         self.client.post("/demo", follow_redirects=False)
@@ -358,7 +388,11 @@ class AppRouteTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertIn(b"Upload receipts", response.data)
-        self.assertIn(b"receipt photos/PDF", response.data)
+        self.assertIn(b"Receipt photos/PDF", response.data)
+        self.assertIn(
+            b"Upload receipts to capture real-time or missing spending",
+            response.data,
+        )
         self.assertIn(b'accept="image/*,.pdf,application/pdf"', response.data)
         self.assertIn(b"receipt-review-list", response.data)
 

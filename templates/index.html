@@ -626,6 +626,7 @@
               Signed in as {{ user.email }}. Upload fresh data, then use the AI Chatbot to add missing spend, review subscriptions, and get ongoing budgeting help grounded in your spending history.
             {% endif %}
           </p>
+          <p class="small muted" style="margin:10px 0 0;">This system doesn’t just track spending — it helps you decide what to do next.</p>
         </div>
         <div class="month-switcher">
           <div>
@@ -647,7 +648,12 @@
           <div class="panel">
             <h2 id="top-insights-heading">{% if demo_mode and profile.selected_month_label %}AI Insights for {{ profile.selected_month_label.split(' ')[0] }}{% else %}Top 3 Insights This Month{% endif %}</h2>
             <ul class="insights-list" id="top-insights-list">
-              {% if profile.top_insights %}
+              {% if profile.top_insights_preview %}
+                <li class="section-intro small muted">Upload one month of transaction history to unlock personalized insights like:</li>
+                {% for insight in profile.top_insights %}
+                  <li>{{ insight }}</li>
+                {% endfor %}
+              {% elif profile.top_insights %}
                 {% for insight in profile.top_insights %}
                   <li>{{ insight }}</li>
                 {% endfor %}
@@ -683,7 +689,10 @@
           <div class="panel">
             <h2>Your Spending Profile</h2>
             <div id="spending-profile-card" class="profile-card">
-              {% if profile.transaction_count and profile.spending_profile %}
+              {% if profile.spending_profile_preview and profile.spending_profile %}
+                <p id="spending-profile-description" class="muted" style="margin:0;">{{ profile.spending_profile.description }}</p>
+                <p id="spending-profile-why-this" class="small muted" style="margin:12px 0 0;">{{ profile.spending_profile.why_this }}</p>
+              {% elif profile.transaction_count and profile.spending_profile %}
                 <strong id="spending-profile-name">{{ profile.spending_profile.name }}</strong>
                 <p id="spending-profile-description" class="muted" style="margin:10px 0 0;">{{ profile.spending_profile.description }}</p>
                 <ul id="spending-profile-reasons">
@@ -708,7 +717,12 @@
                 {% for scenario in profile.scenario_analysis %}
                   <article class="scenario-card">
                     <div class="scenario-card-header">
-                      <div class="scenario-card-title">{{ scenario.title }}</div>
+                      <div>
+                        <div class="scenario-card-title">{{ scenario.title }}</div>
+                        {% if scenario.is_example %}
+                          <div class="small muted">Example</div>
+                        {% endif %}
+                      </div>
                       <div class="impact">{% if (scenario.savings_impact_monthly or 0) > 0 %}+{% endif %}{{ '$%.2f'|format(scenario.savings_impact_monthly or 0) }}/mo</div>
                     </div>
                     {% if scenario.actions %}
@@ -884,7 +898,7 @@
 
           <div class="panel">
             <h2>Upload receipts</h2>
-            <p class="muted">Add receipt photos/PDF here to review merchant, date, amount, and category before they become part of your transaction history.</p>
+            <p class="muted">Upload receipts to capture real-time or missing spending, such as cash purchases, small transactions, or expenses not yet reflected in your card statement. The app will review merchant, date, amount, and category before adding them to your history.</p>
             <form id="receipt-upload-form" class="upload-form">
               <div>
                 <label for="receipt-files">Receipt photos/PDF</label>
@@ -964,7 +978,7 @@
                   </li>
                 {% endfor %}
               {% else %}
-                <li class="empty">No transactions yet. Start with a statement upload.</li>
+                <li class="empty">Upload a statement to see transactions organized by category, merchant, date, and amount.</li>
               {% endif %}
             </ul>
             <div class="inline-actions">
@@ -977,7 +991,12 @@
           <div class="panel">
             <h2>Recommended Actions</h2>
             <ul class="list" id="recommended-actions-list">
-              {% if profile.recommended_actions %}
+              {% if profile.recommended_actions_preview %}
+                <li class="section-intro small muted">Once your data is uploaded, the app will suggest concrete next steps like:</li>
+                {% for action in profile.recommended_actions %}
+                  <li>{{ action }}</li>
+                {% endfor %}
+              {% elif profile.recommended_actions %}
                 {% for action in profile.recommended_actions %}
                   <li>{{ action }}</li>
                 {% endfor %}
@@ -1048,7 +1067,14 @@
               <button type="button" class="secondary" id="messages-jump-bottom">Jump to latest</button>
             </div>
             <ul class="list messages" id="messages-list">
-              {% if profile.messages %}
+              {% if profile.chat_preview %}
+                {% for message in profile.messages %}
+                  <li class="{{ message.role }} preview">
+                    <span class="pill">{{ message.role == 'assistant' and 'AI example' or 'User example' }}</span>
+                    <span>{{ message.content }}</span>
+                  </li>
+                {% endfor %}
+              {% elif profile.messages %}
                 {% for message in profile.messages %}
                   <li class="{{ message.role }}">
                     <span class="pill">{{ message.role }}</span>
@@ -1367,7 +1393,7 @@
       function renderTransactions(transactions) {
         const list = document.getElementById("transactions-list");
         if (!transactions.length) {
-          list.innerHTML = '<li class="empty">No transactions yet. Start with a statement upload.</li>';
+          list.innerHTML = '<li class="empty">Upload a statement to see transactions organized by category, merchant, date, and amount.</li>';
           setupPreviewList("transactions-list", "transactions-toggle");
           return;
         }
@@ -1444,6 +1470,13 @@
 
       function renderSpendingProfile(spendingProfile) {
         const card = document.getElementById("spending-profile-card");
+        if (currentProfile.spending_profile_preview && spendingProfile) {
+          card.innerHTML = `
+            <p id="spending-profile-description" class="muted" style="margin:0;">${escapeHtml(spendingProfile.description || "")}</p>
+            <p id="spending-profile-why-this" class="small muted" style="margin:12px 0 0;">${escapeHtml(spendingProfile.why_this || "")}</p>
+          `;
+          return;
+        }
         if (!currentProfile.transaction_count || !spendingProfile || !spendingProfile.name) {
           card.innerHTML = '<div class="empty">Upload recent spending and save a plan to infer your spending profile.</div>';
           return;
@@ -1486,7 +1519,10 @@
         container.innerHTML = scenarios.map((scenario) => `
           <article class="scenario-card">
             <div class="scenario-card-header">
-              <div class="scenario-card-title">${escapeHtml(scenario.title || "")}</div>
+              <div>
+                <div class="scenario-card-title">${escapeHtml(scenario.title || "")}</div>
+                ${scenario.is_example ? '<div class="small muted">Example</div>' : ""}
+              </div>
               <div class="impact">${scenarioImpact(scenario.savings_impact_monthly || 0)}</div>
             </div>
             ${(scenario.actions || []).length ? `<ul>${(scenario.actions || []).map((action) => `<li>${escapeHtml(action)}</li>`).join("")}</ul>` : ""}
@@ -1498,21 +1534,36 @@
 
       function renderTopInsights(insights) {
         const list = document.getElementById("top-insights-list");
+        if (currentProfile.top_insights_preview && insights.length) {
+          list.innerHTML = [
+            '<li class="section-intro small muted">Upload one month of transaction history to unlock personalized insights like:</li>',
+            ...insights.map((insight) => `<li>${escapeHtml(insight)}</li>`),
+          ].join("");
+          return;
+        }
         if (!insights.length) {
           list.innerHTML = '<li class="empty">Upload a few months of spending and save a goal to unlock richer monthly insights.</li>';
           return;
         }
-        list.innerHTML = insights.map((insight) => `<li>${insight}</li>`).join("");
+        list.innerHTML = insights.map((insight) => `<li>${escapeHtml(insight)}</li>`).join("");
       }
 
       function renderRecommendedActions(actions) {
         const list = document.getElementById("recommended-actions-list");
+        if (currentProfile.recommended_actions_preview && actions.length) {
+          list.innerHTML = [
+            '<li class="section-intro small muted">Once your data is uploaded, the app will suggest concrete next steps like:</li>',
+            ...actions.map((action) => `<li>${escapeHtml(action)}</li>`),
+          ].join("");
+          setupPreviewList("recommended-actions-list", "recommended-actions-toggle");
+          return;
+        }
         if (!actions.length) {
           list.innerHTML = '<li class="empty">Upload recent spending and save a monthly plan to unlock concrete actions.</li>';
           setupPreviewList("recommended-actions-list", "recommended-actions-toggle");
           return;
         }
-        list.innerHTML = actions.map((action) => `<li>${action}</li>`).join("");
+        list.innerHTML = actions.map((action) => `<li>${escapeHtml(action)}</li>`).join("");
         setupPreviewList("recommended-actions-list", "recommended-actions-toggle");
       }
 
@@ -1523,7 +1574,7 @@
           return;
         }
 
-        const items = Array.from(list.children).filter((item) => !item.classList.contains("empty"));
+        const items = Array.from(list.children).filter((item) => !item.classList.contains("empty") && !item.classList.contains("section-intro"));
         if (items.length <= previewCount) {
           toggle.hidden = true;
           toggle.textContent = "Show more";
@@ -1600,6 +1651,16 @@
         const controls = document.getElementById("messages-controls");
         const toggle = document.getElementById("messages-toggle");
         const jumpButton = document.getElementById("messages-jump-bottom");
+        if (currentProfile.chat_preview && messages.length) {
+          list.innerHTML = messages.map((message) => `
+            <li class="${message.role} preview">
+              <span class="pill">${message.role === "assistant" ? "AI example" : "User example"}</span>
+              <span>${escapeHtml(message.content)}</span>
+            </li>
+          `).join("");
+          controls.hidden = true;
+          return;
+        }
         if (!messages.length) {
           list.innerHTML = '<li class="empty">No messages yet. Start with a real expense or a subscription decision.</li>';
           controls.hidden = true;
@@ -1615,7 +1676,7 @@
         list.innerHTML = visibleMessages.map((message) => `
           <li class="${message.role}">
             <span class="pill">${message.role}</span>
-            <span>${message.content}</span>
+            <span>${escapeHtml(message.content)}</span>
           </li>
         `).join("");
         requestAnimationFrame(() => {

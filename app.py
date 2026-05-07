@@ -1111,7 +1111,7 @@ def _coerce_selected_month(storage: Storage, user_id: int, month_key: str | None
 
 def _get_dashboard_profile(storage: Storage, user_id: int, month_key: str | None = None) -> dict[str, Any]:
     profile = storage.get_dashboard_data(user_id, month_key)
-    if not int(profile.get("transaction_count") or 0):
+    if not int(profile.get("transaction_count") or 0) and not bool(profile.get("spending_profile_preview")):
         profile["spending_profile"] = None
     profile["demo_mode"] = bool(session.get("demo_mode")) if has_request_context() else False
     return profile

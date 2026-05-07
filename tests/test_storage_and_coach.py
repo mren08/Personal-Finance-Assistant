@@ -1181,7 +1181,7 @@ class StorageTests(unittest.TestCase):
             scenarios = dashboard["scenario_analysis"]
             self.assertEqual(
                 dashboard["scenario_analysis_notice"],
-                "Upload at least one month of transaction history to generate personalized scenarios.",
+                "Upload at least one month of transaction history to generate personalized scenarios. Below is an example of how your options will appear.",
             )
             self.assertEqual(len(scenarios), 3)
             self.assertEqual(
@@ -1192,12 +1192,21 @@ class StorageTests(unittest.TestCase):
                     "Aggressive Savings",
                 ],
             )
-            for scenario in scenarios:
-                self.assertEqual(scenario["actions"], [])
-                self.assertEqual(scenario["goal_impact"], "")
-                self.assertEqual(scenario["tradeoff"], "")
-                self.assertEqual(scenario["cta_label"], "Ask AI to build this plan")
-                self.assertEqual(scenario["why_this"], "")
+            self.assertEqual(scenarios[0]["actions"], ["Keep current spending habits", "No changes required"])
+            self.assertEqual(scenarios[0]["goal_impact"], "May miss goal by $220.")
+            self.assertEqual(scenarios[0]["cta_label"], "Review Plan")
+            self.assertTrue(scenarios[0]["is_example"])
+            self.assertEqual(scenarios[1]["actions"], ["Reduce dining by 20%", "Cancel one subscription"])
+            self.assertEqual(scenarios[1]["goal_impact"], "Stay on track for your savings goal.")
+            self.assertEqual(scenarios[1]["cta_label"], "Build This Plan")
+            self.assertTrue(scenarios[1]["is_example"])
+            self.assertEqual(
+                scenarios[2]["actions"],
+                ["Reduce dining by 35%", "Reduce shopping by 30%", "Pause two subscriptions"],
+            )
+            self.assertEqual(scenarios[2]["goal_impact"], "Reach your goal one month earlier.")
+            self.assertEqual(scenarios[2]["cta_label"], "Build This Plan")
+            self.assertTrue(scenarios[2]["is_example"])
 
     def test_dashboard_scenarios_fallback_for_profile_only_user_without_month_evidence(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -1219,15 +1228,13 @@ class StorageTests(unittest.TestCase):
             scenarios = dashboard["scenario_analysis"]
             self.assertEqual(
                 dashboard["scenario_analysis_notice"],
-                "Upload at least one month of transaction history to generate personalized scenarios.",
+                "Upload at least one month of transaction history to generate personalized scenarios. Below is an example of how your options will appear.",
             )
             self.assertEqual(len(scenarios), 3)
-            for scenario in scenarios:
-                self.assertEqual(scenario["actions"], [])
-                self.assertEqual(scenario["goal_impact"], "")
-                self.assertEqual(scenario["tradeoff"], "")
-                self.assertEqual(scenario["cta_label"], "Ask AI to build this plan")
-                self.assertEqual(scenario["why_this"], "")
+            self.assertTrue(all(scenario["is_example"] for scenario in scenarios))
+            self.assertEqual(scenarios[0]["cta_label"], "Review Plan")
+            self.assertEqual(scenarios[1]["cta_label"], "Build This Plan")
+            self.assertEqual(scenarios[2]["cta_label"], "Build This Plan")
 
     def test_dashboard_scenarios_use_resolved_selected_month_when_month_key_is_omitted(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -2781,7 +2788,8 @@ class StorageTests(unittest.TestCase):
             dashboard = storage.get_dashboard_data(user_id, "2026-04")
 
             self.assertNotEqual(dashboard["spending_profile"]["name"], "Goal-Focused but Behind")
-            self.assertEqual(dashboard["spending_profile"]["name"], "Flexible Spender")
+            self.assertEqual(dashboard["spending_profile"]["name"], "")
+            self.assertTrue(dashboard["spending_profile_preview"])
             self.assertIn("House down payment", dashboard["goal_summary"])
 
     def test_dashboard_recurring_expenses_are_visible_in_spending_profile_reasons(self):
