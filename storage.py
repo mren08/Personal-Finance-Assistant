@@ -1456,6 +1456,15 @@ class Storage:
 
         monthly_summary = self.get_monthly_summary(user_id, selected_month)
         receipt_behavior_notes = self.list_receipt_behavior_insights(user_id, selected_month) if selected_month else []
+        scenario_analysis = self._scenario_analysis(
+            category_breakdown=category_breakdown,
+            recurring_expenses=recurring_expenses,
+            monthly_summary=monthly_summary,
+            financial_profile=financial_profile,
+            selected_month_spend=total_spent,
+            selected_month=selected_month,
+            selected_transactions=selected_transactions,
+        )
         return {
             "transaction_count": len(selected_transactions),
             "total_spent": total_spent,
@@ -1509,15 +1518,8 @@ class Storage:
                 monthly_summary=monthly_summary,
                 financial_profile=financial_profile,
             ),
-            "scenario_analysis": self._scenario_analysis(
-                category_breakdown=category_breakdown,
-                recurring_expenses=recurring_expenses,
-                monthly_summary=monthly_summary,
-                financial_profile=financial_profile,
-                selected_month_spend=total_spent,
-                selected_month=selected_month,
-                selected_transactions=selected_transactions,
-            ),
+            "scenario_analysis": scenario_analysis,
+            "scenario_analysis_notice": self._scenario_analysis_notice(scenario_analysis),
             "pending_receipts": self.list_pending_receipt_extractions(user_id),
         }
 
@@ -2323,6 +2325,17 @@ class Storage:
             "scenario_key": scenario_key,
         }
 
+    @staticmethod
+    def _scenario_analysis_notice(scenarios: list[dict[str, Any]]) -> str:
+        if scenarios and all(
+            not list(item.get("actions") or [])
+            and not str(item.get("goal_impact") or "").strip()
+            and not str(item.get("tradeoff") or "").strip()
+            for item in scenarios
+        ):
+            return "Upload at least one month of transaction history to generate personalized scenarios."
+        return ""
+
     @classmethod
     def _insufficient_scenario_data(
         cls,
@@ -2517,7 +2530,7 @@ class Storage:
                 "tradeoff": stay_tradeoff,
                 "why_this": why_this,
                 "chat_prompt": titles[0][2],
-                "cta_label": "Ask AI to build this plan",
+                "cta_label": "Review Plan",
                 "scenario_key": "stay_on_current_path",
             },
             {
@@ -2533,7 +2546,7 @@ class Storage:
                 "tradeoff": "This may require a few smaller behavior changes, but it could avoid major lifestyle cuts.",
                 "why_this": why_this,
                 "chat_prompt": titles[1][2],
-                "cta_label": "Ask AI to build this plan",
+                "cta_label": "Build This Plan",
                 "scenario_key": "moderate_adjustment",
             },
             {
@@ -2549,7 +2562,7 @@ class Storage:
                 "tradeoff": "Could create the biggest savings, but may feel more restrictive month to month.",
                 "why_this": why_this,
                 "chat_prompt": titles[2][2],
-                "cta_label": "Ask AI to build this plan",
+                "cta_label": "Build This Plan",
                 "scenario_key": "aggressive_savings",
             },
         ]

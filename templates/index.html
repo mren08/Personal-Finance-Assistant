@@ -366,26 +366,66 @@
     .scenario-grid {
       display: grid;
       grid-template-columns: repeat(3, minmax(0, 1fr));
-      gap: 12px;
+      gap: 14px;
+      align-items: stretch;
+    }
+    .scenario-banner {
+      margin-bottom: 12px;
+      padding: 10px 12px;
+      border-radius: 14px;
+      background: #f5ede1;
+      border: 1px solid #e6d8c1;
+      color: var(--muted);
+      font-size: 0.9rem;
     }
     .scenario-card {
       border: 1px solid #efe4d3;
       border-radius: 16px;
-      background: #fff8f1;
-      padding: 16px;
+      background: linear-gradient(180deg, #fffaf4 0%, #fffdf9 100%);
+      padding: 14px;
       display: grid;
-      gap: 12px;
+      gap: 10px;
+      align-content: start;
+      min-height: 100%;
+    }
+    .scenario-card-header {
+      display: grid;
+      gap: 4px;
+    }
+    .scenario-card-title {
+      font-size: 0.94rem;
+      font-weight: 700;
+      line-height: 1.25;
     }
     .scenario-card .impact {
-      font-size: 1.5rem;
-      font-weight: 700;
+      font-size: 2rem;
+      font-weight: 800;
+      line-height: 1;
+      letter-spacing: -0.03em;
     }
     .scenario-card ul {
       margin: 0;
-      padding-left: 18px;
+      padding-left: 16px;
+      display: grid;
+      gap: 6px;
+      font-size: 0.9rem;
+      color: var(--ink);
+    }
+    .scenario-card li::marker {
+      color: var(--accent);
+    }
+    .scenario-outcome {
+      font-size: 0.88rem;
+      color: var(--muted);
+      line-height: 1.45;
+    }
+    .scenario-outcome strong {
+      color: var(--ink);
     }
     .scenario-card button {
       margin-top: auto;
+      padding: 10px 12px;
+      font-size: 0.92rem;
     }
     .list {
       list-style: none;
@@ -660,13 +700,16 @@
 
           <div class="panel">
             <h2>Ways to Improve Your Outcome</h2>
+            {% if profile.scenario_analysis_notice %}
+              <div id="scenario-analysis-banner" class="scenario-banner">{{ profile.scenario_analysis_notice }}</div>
+            {% endif %}
             <div id="scenario-analysis" class="scenario-grid">
               {% if profile.scenario_analysis %}
                 {% for scenario in profile.scenario_analysis %}
                   <article class="scenario-card">
-                    <div>
-                      <strong>{{ scenario.title }}</strong>
-                      <div class="impact">{{ '$%.2f'|format(scenario.savings_impact_monthly or 0) }}/mo</div>
+                    <div class="scenario-card-header">
+                      <div class="scenario-card-title">{{ scenario.title }}</div>
+                      <div class="impact">{% if (scenario.savings_impact_monthly or 0) > 0 %}+{% endif %}{{ '$%.2f'|format(scenario.savings_impact_monthly or 0) }}/mo</div>
                     </div>
                     {% if scenario.actions %}
                       <ul>
@@ -676,13 +719,7 @@
                       </ul>
                     {% endif %}
                     {% if scenario.goal_impact %}
-                      <div class="small">{{ scenario.goal_impact }}</div>
-                    {% endif %}
-                    {% if scenario.tradeoff %}
-                      <div class="small muted">{{ scenario.tradeoff }}</div>
-                    {% endif %}
-                    {% if scenario.why_this %}
-                      <div class="small muted">{{ scenario.why_this }}</div>
+                      <div class="scenario-outcome"><strong>Outcome:</strong> {{ scenario.goal_impact }}</div>
                     {% endif %}
                     <button type="button" class="secondary" data-scenario-key="{{ scenario.scenario_key }}" data-chat-prompt="{{ scenario.chat_prompt }}">{{ scenario.cta_label or 'Ask AI to build this plan' }}</button>
                   </article>
@@ -1088,6 +1125,11 @@
         return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(value || 0);
       }
 
+      function scenarioImpact(value) {
+        const numericValue = Number(value || 0);
+        return `${numericValue > 0 ? "+" : ""}${money(numericValue)}/mo`;
+      }
+
       function escapeHtml(value) {
         return String(value ?? "")
           .replaceAll("&", "&amp;")
@@ -1418,21 +1460,37 @@
 
       function renderScenarioAnalysis(scenarios) {
         const container = document.getElementById("scenario-analysis");
+        const panel = container.parentElement;
+        let banner = document.getElementById("scenario-analysis-banner");
+        const notice = String((currentProfile && currentProfile.scenario_analysis_notice) || "");
         if (!scenarios.length) {
+          if (banner) {
+            banner.remove();
+          }
           container.innerHTML = '<div class="empty" style="grid-column: 1 / -1;">Upload recent spending and save a plan to unlock scenario analysis.</div>';
           return;
         }
 
+        if (notice) {
+          if (!banner) {
+            banner = document.createElement("div");
+            banner.id = "scenario-analysis-banner";
+            banner.className = "scenario-banner";
+            panel.insertBefore(banner, container);
+          }
+          banner.textContent = notice;
+        } else if (banner) {
+          banner.remove();
+        }
+
         container.innerHTML = scenarios.map((scenario) => `
           <article class="scenario-card">
-            <div>
-              <strong>${escapeHtml(scenario.title || "")}</strong>
-              <div class="impact">${money(scenario.savings_impact_monthly || 0)}/mo</div>
+            <div class="scenario-card-header">
+              <div class="scenario-card-title">${escapeHtml(scenario.title || "")}</div>
+              <div class="impact">${scenarioImpact(scenario.savings_impact_monthly || 0)}</div>
             </div>
             ${(scenario.actions || []).length ? `<ul>${(scenario.actions || []).map((action) => `<li>${escapeHtml(action)}</li>`).join("")}</ul>` : ""}
-            ${scenario.goal_impact ? `<div class="small">${escapeHtml(scenario.goal_impact || "")}</div>` : ""}
-            ${scenario.tradeoff ? `<div class="small muted">${escapeHtml(scenario.tradeoff || "")}</div>` : ""}
-            ${scenario.why_this ? `<div class="small muted">${escapeHtml(scenario.why_this || "")}</div>` : ""}
+            ${scenario.goal_impact ? `<div class="scenario-outcome"><strong>Outcome:</strong> ${escapeHtml(scenario.goal_impact || "")}</div>` : ""}
             <button type="button" class="secondary" data-scenario-key="${escapeHtml(scenario.scenario_key || "")}" data-chat-prompt="${escapeHtml(scenario.chat_prompt || "")}">${escapeHtml(scenario.cta_label || "Ask AI to build this plan")}</button>
           </article>
         `).join("");

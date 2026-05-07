@@ -1104,6 +1104,7 @@ class StorageTests(unittest.TestCase):
             dashboard = storage.get_dashboard_data(user_id, "2026-04")
 
             scenarios = dashboard["scenario_analysis"]
+            self.assertEqual(dashboard["scenario_analysis_notice"], "")
             self.assertEqual(len(scenarios), 3)
             self.assertEqual(
                 [item["title"] for item in scenarios],
@@ -1137,12 +1138,14 @@ class StorageTests(unittest.TestCase):
                 self.assertTrue(expected_fields.issubset(scenario.keys()))
                 self.assertGreaterEqual(len(scenario["actions"]), 2)
                 self.assertLessEqual(len(scenario["actions"]), 3)
-                self.assertEqual(scenario["cta_label"], "Ask AI to build this plan")
                 self.assertEqual(
                     scenario["why_this"],
                     "Based on your uploaded transactions, budget caps, recurring subscriptions, and savings goal.",
                 )
 
+            self.assertEqual(scenarios[0]["cta_label"], "Review Plan")
+            self.assertEqual(scenarios[1]["cta_label"], "Build This Plan")
+            self.assertEqual(scenarios[2]["cta_label"], "Build This Plan")
             self.assertEqual(scenarios[0]["savings_impact_monthly"], 0)
             self.assertTrue(any("current path" in action.lower() for action in scenarios[0]["actions"]))
             self.assertIn("may", scenarios[0]["goal_impact"].lower())
@@ -1150,7 +1153,7 @@ class StorageTests(unittest.TestCase):
             self.assertGreater(scenarios[1]["savings_impact_monthly"], 0)
             self.assertTrue(any("dining" in action.lower() for action in scenarios[1]["actions"]))
             self.assertTrue(any("subscription" in action.lower() for action in scenarios[1]["actions"]))
-            self.assertIn("ask ai", scenarios[1]["cta_label"].lower())
+            self.assertEqual(scenarios[1]["cta_label"], "Build This Plan")
             self.assertIn("moderate adjustment plan", scenarios[1]["chat_prompt"].lower())
             self.assertIn("may", scenarios[1]["tradeoff"].lower())
 
@@ -1176,6 +1179,10 @@ class StorageTests(unittest.TestCase):
             dashboard = storage.get_dashboard_data(user_id, None)
 
             scenarios = dashboard["scenario_analysis"]
+            self.assertEqual(
+                dashboard["scenario_analysis_notice"],
+                "Upload at least one month of transaction history to generate personalized scenarios.",
+            )
             self.assertEqual(len(scenarios), 3)
             self.assertEqual(
                 [item["title"] for item in scenarios],
@@ -1210,6 +1217,10 @@ class StorageTests(unittest.TestCase):
             dashboard = storage.get_dashboard_data(user_id, None)
 
             scenarios = dashboard["scenario_analysis"]
+            self.assertEqual(
+                dashboard["scenario_analysis_notice"],
+                "Upload at least one month of transaction history to generate personalized scenarios.",
+            )
             self.assertEqual(len(scenarios), 3)
             for scenario in scenarios:
                 self.assertEqual(scenario["actions"], [])
@@ -1338,6 +1349,10 @@ class StorageTests(unittest.TestCase):
             dashboard = storage.get_dashboard_data(user_id, "2026-04")
 
             scenarios = dashboard["scenario_analysis"]
+            self.assertEqual(
+                dashboard["scenario_analysis_notice"],
+                "Upload at least one month of transaction history to generate personalized scenarios.",
+            )
             self.assertEqual(len(scenarios), 3)
             for scenario in scenarios:
                 self.assertEqual(scenario["actions"], [])
@@ -1393,6 +1408,10 @@ class StorageTests(unittest.TestCase):
             dashboard = storage.get_dashboard_data(user_id, "2026-04")
 
             scenarios = dashboard["scenario_analysis"]
+            self.assertEqual(
+                dashboard["scenario_analysis_notice"],
+                "Upload at least one month of transaction history to generate personalized scenarios.",
+            )
             self.assertEqual(len(scenarios), 3)
             for scenario in scenarios:
                 self.assertEqual(scenario["actions"], [])
@@ -1596,6 +1615,10 @@ class StorageTests(unittest.TestCase):
             dashboard = storage.get_dashboard_data(user_id, "2026-04")
 
             scenarios = dashboard["scenario_analysis"]
+            self.assertEqual(
+                dashboard["scenario_analysis_notice"],
+                "Upload at least one month of transaction history to generate personalized scenarios.",
+            )
             self.assertEqual(len(scenarios), 3)
             for scenario in scenarios:
                 self.assertEqual(scenario["actions"], [])

@@ -222,6 +222,12 @@ class AppRouteTests(unittest.TestCase):
         self.assertIn(b"Your Spending Profile", response.data)
         self.assertIn(b"Upload recent spending and save a plan to infer your spending profile.", response.data)
         self.assertNotIn(b"Flexible Spender", response.data)
+        self.assertIn(
+            b"Upload at least one month of transaction history to generate personalized scenarios.",
+            response.data,
+        )
+        self.assertNotIn(b"Based on your uploaded transactions, budget caps, recurring subscriptions, and savings goal.", response.data)
+        self.assertNotIn(b"Right now this is a placeholder view", response.data)
 
     def test_demo_logout_clears_demo_session(self):
         self.client.post("/demo", follow_redirects=False)
@@ -1358,7 +1364,13 @@ class AppRouteTests(unittest.TestCase):
         self.assertIn(b"Stay on Current Path", response.data)
         self.assertIn(b"Moderate Adjustment", response.data)
         self.assertIn(b"Aggressive Savings", response.data)
+        self.assertIn(b"Outcome:</strong>", response.data)
+        self.assertNotIn(b"Upload at least one month of transaction history to generate personalized scenarios.", response.data)
+        self.assertNotIn(b'<div class="small muted">This may require a few smaller behavior changes', response.data)
+        self.assertNotIn(b'<div class="small muted">Could create the biggest savings, but may feel more restrictive month to month.', response.data)
         self.assertIn(b'data-scenario-key="stay_on_current_path"', response.data)
+        self.assertIn(b"Review Plan", response.data)
+        self.assertIn(b"Build This Plan", response.data)
         self.assertIn(b'data-chat-prompt="Help me review my current path using my current spending data."', response.data)
         self.assertIn(b'data-scenario-key="moderate_adjustment"', response.data)
         self.assertIn(b'data-scenario-key="aggressive_savings"', response.data)
@@ -1411,7 +1423,7 @@ class AppRouteTests(unittest.TestCase):
             chart_index,
             monthly_plan_index,
         )
-        self.assertGreaterEqual(response.data.count(b"Based on your uploaded transactions"), 2)
+        self.assertGreaterEqual(response.data.count(b"Based on your uploaded transactions"), 1)
 
     def test_profile_update_preserves_legacy_budgeting_goal_when_structured_goal_fields_are_omitted(self):
         self._signup_and_login()
