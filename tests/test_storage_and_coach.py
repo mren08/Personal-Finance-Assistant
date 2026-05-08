@@ -1143,7 +1143,7 @@ class StorageTests(unittest.TestCase):
                     "Based on your uploaded transactions, budget caps, recurring subscriptions, and savings goal.",
                 )
 
-            self.assertEqual(scenarios[0]["cta_label"], "Review Plan")
+            self.assertEqual(scenarios[0]["cta_label"], "Build This Plan")
             self.assertEqual(scenarios[1]["cta_label"], "Build This Plan")
             self.assertEqual(scenarios[2]["cta_label"], "Build This Plan")
             self.assertEqual(scenarios[0]["savings_impact_monthly"], 0)
@@ -1194,7 +1194,7 @@ class StorageTests(unittest.TestCase):
             )
             self.assertEqual(scenarios[0]["actions"], ["Keep current spending habits", "No changes required"])
             self.assertEqual(scenarios[0]["goal_impact"], "May miss goal by $220.")
-            self.assertEqual(scenarios[0]["cta_label"], "Review Plan")
+            self.assertEqual(scenarios[0]["cta_label"], "Build This Plan")
             self.assertTrue(scenarios[0]["is_example"])
             self.assertEqual(scenarios[1]["actions"], ["Reduce dining by 20%", "Cancel one subscription"])
             self.assertEqual(scenarios[1]["goal_impact"], "Stay on track for your savings goal.")
@@ -1232,7 +1232,7 @@ class StorageTests(unittest.TestCase):
             )
             self.assertEqual(len(scenarios), 3)
             self.assertTrue(all(scenario["is_example"] for scenario in scenarios))
-            self.assertEqual(scenarios[0]["cta_label"], "Review Plan")
+            self.assertEqual(scenarios[0]["cta_label"], "Build This Plan")
             self.assertEqual(scenarios[1]["cta_label"], "Build This Plan")
             self.assertEqual(scenarios[2]["cta_label"], "Build This Plan")
 

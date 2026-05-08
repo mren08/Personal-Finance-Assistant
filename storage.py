@@ -1650,7 +1650,7 @@ class Storage:
                 "tradeoff": "",
                 "why_this": "",
                 "chat_prompt": "Help me review my current path using my current spending data.",
-                "cta_label": "Review Plan",
+                "cta_label": "Build This Plan",
                 "scenario_key": "stay_on_current_path",
                 "is_example": True,
             },
@@ -2453,7 +2453,7 @@ class Storage:
             "tradeoff": "",
             "why_this": "",
             "chat_prompt": chat_prompt,
-            "cta_label": "Ask AI to build this plan",
+            "cta_label": "Build This Plan",
             "scenario_key": scenario_key,
         }
 
@@ -2662,7 +2662,7 @@ class Storage:
                 "tradeoff": stay_tradeoff,
                 "why_this": why_this,
                 "chat_prompt": titles[0][2],
-                "cta_label": "Review Plan",
+                "cta_label": "Build This Plan",
                 "scenario_key": "stay_on_current_path",
             },
             {
